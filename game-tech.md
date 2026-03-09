@@ -97,44 +97,79 @@ The client runs in the browser via `wasm32-unknown-unknown`. The full stack (Bev
 
 ### Renderer
 
-- **WebGL2** for broadest browser compatibility (enable via `bevy/webgl2` feature)
-- WebGPU available but still maturing in browsers; not used initially
+- **WebGPU** for browser builds — required for Bevy's bloom/post-processing effects
+- Enabled via `bevy/webgpu` feature in WASM target dependencies
 
 ### Networking in Browser
 
 - WebTransport (QUIC) works from browser — same transport as native client
-- Browser support: Chrome 97+, Edge 98+, Firefox 114+, Safari 26.4+
-- **Certificate handling differs from native:**
-  - Server generates short-lived ECDSA P-256 self-signed cert (max 14-day validity per spec)
-  - Server exposes cert SHA-256 digest via HTTP endpoint
-  - WASM client fetches digest, passes to Lightyear's `WebTransportClientIo { certificate_digest }`
-  - Browser uses `serverCertificateHashes` API to validate
-  - Native client uses `dangerous_configuration` for dev (skips validation)
-  - Production: use CA-signed certs, no digest dance needed
-- **Fallback:** WebSocket transport for browsers without WebTransport support
+- **Certificate handling for dev (self-signed certs):**
+  1. Server generates self-signed cert on startup and prints the SHA-256 hash
+  2. Browser client receives the hash via URL query parameter `?cert=<hex>`
+  3. Browser uses `serverCertificateHashes` WebTransport API to validate
+  4. Native client uses `dangerous_configuration` feature to skip validation
+  5. Production: use CA-signed certs, no cert hash needed
+
+### Building and Running (WASM)
+
+**Prerequisites:**
+- [Trunk](https://trunkrs.dev/) — `cargo install trunk`
+- WASM target — `rustup target add wasm32-unknown-unknown`
+
+**Steps:**
+
+1. Start the server (native):
+   ```
+   cargo run -p btl-server
+   ```
+   Note the certificate hash printed in the server log:
+   ```
+   Certificate hash (for browser clients): <hex_hash>
+   ```
+
+2. In a separate terminal, start the WASM client dev server:
+   ```
+   cd crates/btl-client
+   trunk serve --release
+   ```
+   This builds the WASM client and serves it at `http://127.0.0.1:8080/`.
+
+3. Open in a **Chromium-based browser** (Chrome or Edge):
+   ```
+   http://127.0.0.1:8080/?id=2&server=127.0.0.1:5888&cert=<hex_hash>
+   ```
+   Replace `<hex_hash>` with the certificate hash from step 1.
+
+**Query parameters:**
+- `id` — Client ID (must be unique per client, default: 1)
+- `server` — Server address (default: 127.0.0.1:5888)
+- `cert` — Server certificate SHA-256 hash (required for self-signed certs)
 
 ### Build Tooling
 
-- **Bevy CLI** (`bevy_cli`) — recommended first-party tool
-- `bevy run web --open` for dev, `bevy build --release web --bundle` for deployment
-- Alternative: manual `cargo build --target wasm32-unknown-unknown` + `wasm-bindgen`
+- **Trunk** — WASM bundler for Rust/Bevy, configured via `Trunk.toml` and `index.html`
+- `trunk serve --release` for dev (auto-rebuilds on change)
+- `trunk build --release` for deployment (outputs to `dist/`)
+- Note: do NOT use `data-wasm-opt` in index.html unless `wasm-opt` is installed — Trunk will fail silently
 
 ### WASM Constraints
 
 - Single-threaded (no WASM threads) — physics + rendering + networking share one core
-- Binary size ~15MB after `wasm-opt` with LTO
 - `load_folder()` unavailable — must load assets individually
-- `clap` CLI parsing gated behind `#[cfg(not(target_arch = "wasm32"))]`
+- `clap` CLI parsing gated behind `#[cfg(not(target_arch = "wasm32"))]` — WASM uses URL query params instead
 - Audio requires user interaction before playback (browser autoplay policy)
+- `console_error_panic_hook` surfaces Rust panics to the browser console (enabled in main)
 
 ### Browser Compatibility
 
-| Browser | WebTransport | Cert pinning (`serverCertificateHashes`) |
-|---------|-------------|----------------------------------------|
-| Chrome 97+ | Yes | Yes |
-| Edge 98+ | Yes | Yes |
-| Firefox 114+ | Yes | Partial |
-| Safari 26.4+ | Yes | Unknown |
+| Browser | Status | Notes |
+|---------|--------|-------|
+| Chrome 97+ | **Works** | Full WebTransport + cert pinning support |
+| Edge 98+ | **Works** | Chromium-based, same as Chrome |
+| Firefox | **Broken** | WebTransport `ReadableStream` incompatibility (see below) |
+| Safari | **Untested** | WebTransport support is recent |
+
+**Firefox incompatibility:** Lightyear's WebTransport dependency (`xwt-web` v0.15) calls `.get_reader()` on `ReadableByteStream` objects. Firefox requires `.get_reader({ mode: "byob" })` for byte streams, causing a `TypeError: Trying to read with incompatible controller`. This is a third-party crate issue — not fixable without an upstream patch to `xwt-web`. Use Chrome or Edge for now.
 
 ## Open Technical Questions
 
