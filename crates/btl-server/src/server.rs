@@ -31,6 +31,11 @@ fn start_server(mut commands: Commands) {
     let certificate = Identity::self_signed(["localhost", "127.0.0.1", "::1"])
         .expect("Failed to generate self-signed certificate");
 
+    // Print cert hash for WASM clients (hex without colons)
+    let cert_hash = certificate.certificate_chain().as_slice()[0].hash();
+    let hash_hex: String = cert_hash.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    info!("Certificate hash (for browser clients): {hash_hex}");
+
     let netcode = NetcodeServer::new(NetcodeConfig {
         protocol_id: PROTOCOL_ID,
         private_key: PRIVATE_KEY,
@@ -51,6 +56,10 @@ fn start_server(mut commands: Commands) {
 
 /// When a new client link is created, attach a ReplicationSender.
 fn handle_new_client_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
+    info!(
+        "New client link entity {:?} — attaching ReplicationSender",
+        trigger.entity
+    );
     commands.entity(trigger.entity).insert((
         ReplicationSender::new(
             REPLICATION_INTERVAL,
@@ -90,13 +99,16 @@ fn handle_client_connected(
 
     // Spawn position based on team
     let spawn_pos = match team {
-        Team::Red => Vec2::new(-200.0, 0.0),
-        Team::Blue => Vec2::new(200.0, 0.0),
+        Team::Red => Vec2::new(-50.0, 0.0),
+        Team::Blue => Vec2::new(50.0, 0.0),
     };
 
-    info!("Client {peer_id:?} connected -> {team:?} team");
+    info!(
+        "Client {peer_id:?} connected -> {team:?} team (link entity: {:?})",
+        trigger.entity
+    );
 
-    commands.spawn((
+    let ship = commands.spawn((
         ShipBundle::new(peer_id, team, spawn_pos),
         // Replicate to all clients
         Replicate::to_clients(NetworkTarget::All),
@@ -109,5 +121,7 @@ fn handle_client_connected(
             owner: trigger.entity,
             lifetime: Default::default(),
         },
-    ));
+    )).id();
+
+    info!("Spawned ship entity {ship:?} for {peer_id:?} at {spawn_pos}");
 }

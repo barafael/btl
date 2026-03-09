@@ -34,7 +34,10 @@ pub struct ShipInput {
     pub thrust_backward: bool,
     pub rotate_left: bool,
     pub rotate_right: bool,
+    pub strafe_left: bool,
+    pub strafe_right: bool,
     pub afterburner: bool,
+    pub stabilize: bool,
 }
 
 impl MapEntities for ShipInput {
@@ -53,7 +56,7 @@ impl Plugin for ProtocolPlugin {
         // Inputs
         app.add_plugins(InputPlugin::<ShipInput>::default());
 
-        // Game components
+        // Game components (prediction is added in btl-shared where the feature is available)
         app.register_component::<PlayerId>();
         app.register_component::<Team>();
     }

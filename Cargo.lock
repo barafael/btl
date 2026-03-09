@@ -2117,12 +2117,15 @@ dependencies = [
 name = "btl-client"
 version = "0.1.0"
 dependencies = [
+ "avian2d",
  "bevy",
  "btl-protocol",
  "btl-shared",
  "clap",
+ "console_error_panic_hook",
  "getrandom 0.2.17",
  "lightyear",
+ "web-sys",
 ]
 
 [[package]]
@@ -7898,6 +7901,7 @@ dependencies = [
  "smallvec",
  "static_assertions",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
  "wgpu-core",
  "wgpu-hal",
