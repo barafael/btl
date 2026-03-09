@@ -10,6 +10,8 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: None,
+                    close_when_requested: false,
+                    exit_condition: bevy::window::ExitCondition::DontExit,
                     ..default()
                 })
                 .disable::<bevy::winit::WinitPlugin>(),
