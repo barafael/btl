@@ -4,3 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bevy = "0.18.1"
+lightyear = { version = "0.26.4", features = ["client", "server", "udp", "avian2d"] }
+avian2d = "0.5.0"
+
+# Fast compile times for development
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
