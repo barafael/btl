@@ -15,7 +15,7 @@
 - Snapshot interpolation for smooth rendering of remote entities
 - First-class integration with Avian2D physics (`lightyear_avian2d`)
 - Interest management (rooms-based) for bandwidth optimization
-- Transport options: UDP, WebTransport (QUIC), WebSocket
+- Transport: **WebTransport (QUIC)** — encrypted by default, multiplexed streams, lower latency than TCP. Self-signed certs for development, proper certs for production
 
 ### Alternatives considered
 

@@ -1,0 +1,20 @@
+[package]
+name = "btl-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+btl-protocol = { path = "../btl-protocol" }
+btl-shared = { path = "../btl-shared" }
+bevy = "0.18.1"
+lightyear = { version = "0.26.4", features = [
+    "server",
+    "webtransport",
+    "webtransport_self_signed",
+    "netcode",
+    "input_native",
+    "replication",
+    "prediction",
+    "interpolation",
+    "avian2d",
+] }

@@ -1,12 +1,11 @@
-[package]
-name = "btl"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-bevy = "0.18.1"
-lightyear = { version = "0.26.4", features = ["client", "server", "udp", "avian2d"] }
-avian2d = "0.5.0"
+[workspace]
+members = [
+    "crates/btl-protocol",
+    "crates/btl-shared",
+    "crates/btl-server",
+    "crates/btl-client",
+]
+resolver = "3"
 
 # Fast compile times for development
 [profile.dev]
