@@ -2121,6 +2121,7 @@ dependencies = [
  "btl-protocol",
  "btl-shared",
  "clap",
+ "getrandom 0.2.17",
  "lightyear",
 ]
 
@@ -2128,7 +2129,6 @@ dependencies = [
 name = "btl-protocol"
 version = "0.1.0"
 dependencies = [
- "avian2d",
  "bevy",
  "lightyear",
  "serde",

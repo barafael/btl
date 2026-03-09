@@ -1,4 +1,3 @@
-use avian2d::prelude::*;
 use bevy::ecs::entity::MapEntities;
 use bevy::prelude::*;
 use lightyear::prelude::input::native::InputPlugin;
@@ -44,6 +43,9 @@ impl MapEntities for ShipInput {
 
 // --- Protocol Plugin ---
 
+/// Registers protocol types (inputs, game components).
+/// Does NOT register physics components — that's done in btl-shared
+/// where the lightyear_avian2d integration is available.
 pub struct ProtocolPlugin;
 
 impl Plugin for ProtocolPlugin {
@@ -51,28 +53,8 @@ impl Plugin for ProtocolPlugin {
         // Inputs
         app.add_plugins(InputPlugin::<ShipInput>::default());
 
-        // Components
+        // Game components
         app.register_component::<PlayerId>();
         app.register_component::<Team>();
-
-        // Avian physics components: prediction + interpolation + rollback thresholds
-        app.register_component::<Position>()
-            .add_prediction()
-            .add_should_rollback(|this: &Position, that: &Position| {
-                (this.0 - that.0).length() >= 0.01
-            })
-            .add_linear_interpolation()
-            .add_linear_correction_fn();
-
-        app.register_component::<Rotation>()
-            .add_prediction()
-            .add_should_rollback(|this: &Rotation, that: &Rotation| {
-                this.angle_between(*that) >= 0.01
-            })
-            .add_linear_interpolation()
-            .add_linear_correction_fn();
-
-        app.register_component::<LinearVelocity>().add_prediction();
-        app.register_component::<AngularVelocity>().add_prediction();
     }
 }

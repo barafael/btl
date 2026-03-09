@@ -2,6 +2,7 @@ use avian2d::prelude::*;
 use bevy::prelude::*;
 use lightyear::avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
 use lightyear::prelude::input::native::ActionState;
+use lightyear::prelude::*;
 
 use btl_protocol::*;
 
@@ -19,6 +20,27 @@ pub struct SharedPlugin;
 impl Plugin for SharedPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ProtocolPlugin);
+
+        // Register Avian physics components for prediction/interpolation/rollback
+        // (requires lightyear_avian2d for Diffable trait impls)
+        app.register_component::<Position>()
+            .add_prediction()
+            .add_should_rollback(|this: &Position, that: &Position| {
+                (this.0 - that.0).length() >= 0.01
+            })
+            .add_linear_interpolation()
+            .add_linear_correction_fn();
+
+        app.register_component::<Rotation>()
+            .add_prediction()
+            .add_should_rollback(|this: &Rotation, that: &Rotation| {
+                this.angle_between(*that) >= 0.01
+            })
+            .add_linear_interpolation()
+            .add_linear_correction_fn();
+
+        app.register_component::<LinearVelocity>().add_prediction();
+        app.register_component::<AngularVelocity>().add_prediction();
 
         // Lightyear <-> Avian2D integration
         app.add_plugins(LightyearAvianPlugin {

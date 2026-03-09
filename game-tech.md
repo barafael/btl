@@ -91,6 +91,51 @@ Current architecture targets 6v6 (12 players). Here's how the decisions hold at 
 - Single dedicated server is sufficient up to ~32 players for a physics game of this complexity.
 - Beyond 32 players: spatial partitioning with multiple server processes — a fundamentally different architecture (map sharding, cross-server entity handoff).
 
+## Web / WASM Support
+
+The client runs in the browser via `wasm32-unknown-unknown`. The full stack (Bevy + Lightyear + Avian2D) supports WASM.
+
+### Renderer
+
+- **WebGL2** for broadest browser compatibility (enable via `bevy/webgl2` feature)
+- WebGPU available but still maturing in browsers; not used initially
+
+### Networking in Browser
+
+- WebTransport (QUIC) works from browser — same transport as native client
+- Browser support: Chrome 97+, Edge 98+, Firefox 114+, Safari 26.4+
+- **Certificate handling differs from native:**
+  - Server generates short-lived ECDSA P-256 self-signed cert (max 14-day validity per spec)
+  - Server exposes cert SHA-256 digest via HTTP endpoint
+  - WASM client fetches digest, passes to Lightyear's `WebTransportClientIo { certificate_digest }`
+  - Browser uses `serverCertificateHashes` API to validate
+  - Native client uses `dangerous_configuration` for dev (skips validation)
+  - Production: use CA-signed certs, no digest dance needed
+- **Fallback:** WebSocket transport for browsers without WebTransport support
+
+### Build Tooling
+
+- **Bevy CLI** (`bevy_cli`) — recommended first-party tool
+- `bevy run web --open` for dev, `bevy build --release web --bundle` for deployment
+- Alternative: manual `cargo build --target wasm32-unknown-unknown` + `wasm-bindgen`
+
+### WASM Constraints
+
+- Single-threaded (no WASM threads) — physics + rendering + networking share one core
+- Binary size ~15MB after `wasm-opt` with LTO
+- `load_folder()` unavailable — must load assets individually
+- `clap` CLI parsing gated behind `#[cfg(not(target_arch = "wasm32"))]`
+- Audio requires user interaction before playback (browser autoplay policy)
+
+### Browser Compatibility
+
+| Browser | WebTransport | Cert pinning (`serverCertificateHashes`) |
+|---------|-------------|----------------------------------------|
+| Chrome 97+ | Yes | Yes |
+| Edge 98+ | Yes | Yes |
+| Firefox 114+ | Yes | Partial |
+| Safari 26.4+ | Yes | Unknown |
+
 ## Open Technical Questions
 
 - Exact Bevy + Lightyear + Avian2D version pinning (check latest compatible set)

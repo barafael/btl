@@ -5,11 +5,8 @@ edition = "2024"
 
 [dependencies]
 bevy = { version = "0.18.1", default-features = false }
-lightyear = { version = "0.26.4", features = [
+lightyear = { version = "0.26.4", default-features = false, features = [
     "input_native",
     "replication",
-    "prediction",
-    "interpolation",
 ] }
-avian2d = { version = "0.5.0", features = ["serialize"] }
 serde = { version = "1", features = ["derive"] }

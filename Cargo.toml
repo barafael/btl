@@ -13,3 +13,9 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Optimized WASM builds
+[profile.web-release]
+inherits = "release"
+opt-level = "z"
+lto = true

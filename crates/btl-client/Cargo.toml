@@ -3,6 +3,10 @@ name = "btl-client"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["native"]
+native = ["dep:clap"]
+
 [dependencies]
 btl-protocol = { path = "../btl-protocol" }
 btl-shared = { path = "../btl-shared" }
@@ -10,7 +14,6 @@ bevy = "0.18.1"
 lightyear = { version = "0.26.4", features = [
     "client",
     "webtransport",
-    "webtransport_dangerous_configuration",
     "netcode",
     "input_native",
     "replication",
@@ -19,4 +22,13 @@ lightyear = { version = "0.26.4", features = [
     "frame_interpolation",
     "avian2d",
 ] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
+
+# Native-only: skip cert validation for dev
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lightyear = { version = "0.26.4", features = ["webtransport_dangerous_configuration"] }
+
+# WASM: use WebGL2 renderer + getrandom js support
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "0.18.1", features = ["webgl2"] }
+getrandom = { version = "0.2", features = ["js"] }
