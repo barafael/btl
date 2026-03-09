@@ -1,4 +1,5 @@
 mod client;
+mod minimap;
 mod particles;
 mod starfield;
 
@@ -8,7 +9,10 @@ use bevy::log::LogPlugin;
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 use btl_protocol::SERVER_PORT;
-use btl_shared::{MAP_RADIUS, SharedPlugin};
+use btl_shared::{
+    MAP_RADIUS, OBJECTIVE_ZONE_RADIUS, SharedPlugin,
+    objective_zone_positions, tridrant_boundary_angles,
+};
 
 fn default_server_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], SERVER_PORT))
@@ -98,7 +102,8 @@ fn main() {
         })
         .add_plugins(starfield::StarfieldPlugin)
         .add_plugins(particles::ParticlePlugin)
-        .add_systems(Startup, (setup_camera, spawn_boundary_ring))
+        .add_plugins(minimap::MinimapPlugin)
+        .add_systems(Startup, (setup_camera, spawn_boundary_ring, spawn_tridrant_markers, spawn_objective_zones))
         .run();
 }
 
@@ -118,6 +123,56 @@ fn setup_camera(mut commands: Commands) {
             ..Bloom::NATURAL
         },
     ));
+}
+
+/// Draw dotted lines from center to boundary for each tridrant division.
+fn spawn_tridrant_markers(mut commands: Commands) {
+    let angles = tridrant_boundary_angles();
+    let dot_spacing = 40.0;
+    let dot_size = 2.0;
+    let color = Color::srgba(0.2, 0.2, 0.3, 0.4);
+
+    for angle in angles {
+        let dir = Vec2::new(angle.cos(), angle.sin());
+        let mut dist = 200.0; // start away from center
+        while dist < MAP_RADIUS {
+            let pos = dir * dist;
+            commands.spawn((
+                Sprite {
+                    color,
+                    custom_size: Some(Vec2::splat(dot_size)),
+                    ..default()
+                },
+                Transform::from_xyz(pos.x, pos.y, -49.0),
+            ));
+            dist += dot_spacing;
+        }
+    }
+}
+
+/// Draw circular zone indicators at each objective position.
+fn spawn_objective_zones(mut commands: Commands) {
+    let zones = objective_zone_positions();
+    let marker_count = 120;
+    let marker_size = 3.0;
+    let color = Color::srgba(0.4, 0.4, 0.2, 0.5);
+
+    for center in zones {
+        for i in 0..marker_count {
+            let angle = (i as f32 / marker_count as f32) * std::f32::consts::TAU;
+            let x = center.x + OBJECTIVE_ZONE_RADIUS * angle.cos();
+            let y = center.y + OBJECTIVE_ZONE_RADIUS * angle.sin();
+
+            commands.spawn((
+                Sprite {
+                    color,
+                    custom_size: Some(Vec2::splat(marker_size)),
+                    ..default()
+                },
+                Transform::from_xyz(x, y, -48.0),
+            ));
+        }
+    }
 }
 
 fn spawn_boundary_ring(mut commands: Commands) {

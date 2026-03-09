@@ -11,7 +11,7 @@ use lightyear::webtransport::prelude::client::WebTransportClientIo;
 use avian2d::prelude::*;
 
 use btl_protocol::*;
-use btl_shared::{FrameInterpolate, Position, Rotation, SHIP_MASS, SHIP_RADIUS};
+use btl_shared::{Asteroid, FrameInterpolate, Position, Rotation, SHIP_MASS, SHIP_RADIUS};
 
 /// Marker for the locally controlled ship.
 #[derive(Component)]
@@ -20,6 +20,10 @@ pub struct LocalShip;
 /// Marker to track that we've already initialized rendering for a predicted entity.
 #[derive(Component)]
 struct ShipInitialized;
+
+/// Marker for asteroid entities that have been given visuals.
+#[derive(Component)]
+struct AsteroidInitialized;
 
 pub struct ClientPlugin {
     pub server_addr: SocketAddr,
@@ -49,7 +53,7 @@ impl Plugin for ClientPlugin {
             buffer_input.in_set(InputSystems::WriteClientInputs),
         );
         app.add_observer(log_connected);
-        app.add_systems(Update, (init_predicted_ships, init_interpolated_ships, camera_follow_local_ship, update_hud));
+        app.add_systems(Update, (init_predicted_ships, init_interpolated_ships, init_asteroids, camera_follow_local_ship, update_hud));
         app.add_systems(Startup, spawn_hud);
     }
 }
@@ -216,36 +220,171 @@ fn init_interpolated_ships(
     }
 }
 
+/// Initialize rendering for replicated asteroid entities.
+fn init_asteroids(
+    mut commands: Commands,
+    query: Query<(Entity, &Asteroid), Without<AsteroidInitialized>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for (entity, asteroid) in query.iter() {
+        let r = asteroid.radius;
+        let seed = entity.to_bits();
+
+        // Use a regular polygon (7-sided) as asteroid shape
+        let mesh = meshes.add(RegularPolygon::new(r, 7));
+
+        // Brownish-gray color with slight variation per asteroid
+        let hash = seed.wrapping_mul(2654435761);
+        let gray = 0.25 + 0.1 * ((hash % 1000) as f32 / 1000.0);
+        let color = Color::srgb(gray + 0.05, gray, gray - 0.03);
+
+        commands.entity(entity).insert((
+            Mesh2d(mesh),
+            MeshMaterial2d(materials.add(color)),
+            AsteroidInitialized,
+        ));
+    }
+}
+
 #[derive(Component)]
-struct CoordsText;
+struct HudText;
+
+#[derive(Component)]
+struct HealthBarFill;
+
+#[derive(Component)]
+struct FuelBarFill;
+
+const BAR_WIDTH: f32 = 160.0;
+const BAR_HEIGHT: f32 = 10.0;
 
 fn spawn_hud(mut commands: Commands) {
-    commands.spawn((
-        CoordsText,
-        Text::new("(0, 0)"),
-        TextFont {
-            font_size: 16.0,
-            ..default()
-        },
-        TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)),
+    // Bottom-left HUD panel
+    let panel = commands.spawn((
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(12.0),
-            left: Val::Percent(50.0),
+            left: Val::Px(12.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
             ..default()
         },
+    )).id();
+
+    // Health bar
+    let health_row = commands.spawn((
+        ChildOf(panel),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            ..default()
+        },
+    )).id();
+
+    commands.spawn((
+        ChildOf(health_row),
+        Text::new("HP"),
+        TextFont { font_size: 12.0, ..default() },
+        TextColor(Color::srgba(0.8, 0.3, 0.3, 0.9)),
+    ));
+
+    let health_bg = commands.spawn((
+        ChildOf(health_row),
+        Node {
+            width: Val::Px(BAR_WIDTH),
+            height: Val::Px(BAR_HEIGHT),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.15, 0.05, 0.05, 0.8)),
+    )).id();
+
+    commands.spawn((
+        ChildOf(health_bg),
+        HealthBarFill,
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.8, 0.2, 0.2)),
+    ));
+
+    // Fuel bar
+    let fuel_row = commands.spawn((
+        ChildOf(panel),
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            ..default()
+        },
+    )).id();
+
+    commands.spawn((
+        ChildOf(fuel_row),
+        Text::new("FU"),
+        TextFont { font_size: 12.0, ..default() },
+        TextColor(Color::srgba(0.3, 0.5, 0.8, 0.9)),
+    ));
+
+    let fuel_bg = commands.spawn((
+        ChildOf(fuel_row),
+        Node {
+            width: Val::Px(BAR_WIDTH),
+            height: Val::Px(BAR_HEIGHT),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.05, 0.05, 0.15, 0.8)),
+    )).id();
+
+    commands.spawn((
+        ChildOf(fuel_bg),
+        FuelBarFill,
+        Node {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.2, 0.4, 0.8)),
+    ));
+
+    // Speed + coords text
+    commands.spawn((
+        ChildOf(panel),
+        HudText,
+        Text::new("SPD 0 | (0, 0)"),
+        TextFont { font_size: 12.0, ..default() },
+        TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)),
     ));
 }
 
 fn update_hud(
-    ship_query: Query<&Transform, With<LocalShip>>,
-    mut text_query: Query<&mut Text, With<CoordsText>>,
+    ship_query: Query<(&Transform, &Health, &Fuel, &LinearVelocity), With<LocalShip>>,
+    mut text_query: Query<&mut Text, With<HudText>>,
+    mut health_bar: Query<&mut Node, (With<HealthBarFill>, Without<FuelBarFill>, Without<HudText>)>,
+    mut fuel_bar: Query<&mut Node, (With<FuelBarFill>, Without<HealthBarFill>, Without<HudText>)>,
 ) {
-    let Ok(ship_tf) = ship_query.single() else { return };
-    let Ok(mut text) = text_query.single_mut() else { return };
-    let x = ship_tf.translation.x as i32;
-    let y = ship_tf.translation.y as i32;
-    **text = format!("({x}, {y})");
+    let Ok((ship_tf, health, fuel, lin_vel)) = ship_query.single() else { return };
+
+    // Update text
+    if let Ok(mut text) = text_query.single_mut() {
+        let x = ship_tf.translation.x as i32;
+        let y = ship_tf.translation.y as i32;
+        let speed = lin_vel.0.length() as i32;
+        **text = format!("SPD {speed} | ({x}, {y})");
+    }
+
+    // Update health bar width
+    if let Ok(mut node) = health_bar.single_mut() {
+        node.width = Val::Percent(health.fraction() * 100.0);
+    }
+
+    // Update fuel bar width
+    if let Ok(mut node) = fuel_bar.single_mut() {
+        node.width = Val::Percent(fuel.fraction() * 100.0);
+    }
 }
 
 /// Camera follows the locally controlled ship.

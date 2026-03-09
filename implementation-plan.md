@@ -32,55 +32,39 @@
 
 ---
 
-## Phase 2: World (in progress)
+## Phase 2: World ✅
 
 ### 2.1 Map
 
-- [x] Circular boundary with soft zone (progressive drag + hard edge reflection at MAP_RADIUS=3000)
-- [x] Visual boundary ring (360 dim red markers)
-- [ ] Static asteroid obstacles: `RigidBody::Static` colliders, various sizes
-  - Scatter 50–100 asteroids across the map
-  - 3–5 size variants (small 20px, medium 50px, large 100px, huge 200px)
-  - Random rotation for visual variety
-  - Replicated so both client and server agree on placement
-  - Server seeds asteroid positions deterministically from a fixed seed
-- [ ] Divide map into 3 tridrants (120° sectors), mark objective zone positions
-  - Visual sector lines or subtle coloring to hint at tridrant boundaries
-  - Place objective zone centers at ~60% of MAP_RADIUS along each tridrant's bisector
+- [x] Circular boundary with soft zone (progressive drag + hard edge reflection at MAP_RADIUS=6000)
+- [x] Visual boundary ring (720 dim red markers)
+- [x] Static asteroid obstacles: 80 asteroids, 4 size variants (20/50/100/200), deterministic seed
+  - `RigidBody::Static` with circle colliders, replicated from server
+  - 7-sided polygon meshes with brownish-gray color variation
+  - Uniform area distribution, min 800 from center
+- [x] Tridrant sector markings: 3 dotted lines from center to boundary (120° apart)
+- [x] Objective zone circles: 3 zones at 60% MAP_RADIUS, 300-unit radius, yellow dotted rings
 - [x] Camera follows local player's ship
 
 ### 2.2 2.5D Visuals
 
 - [x] Parallax background: 4 star layers (parallax 0.05/0.15/0.3/0.5), infinite wrapping, 400 stars
-- [x] Ship rendering: Mesh2d hexagons with team color, rotation via `FrameInterpolate`
-- [ ] Ship sprites: replace placeholder hexagons with proper ship sprites/meshes
-  - Distinct silhouette per ship class (can start with Interceptor-only)
-  - Team color tinting (red/blue)
-  - Rotation-aligned rendering
-- [ ] Asteroid sprites/meshes
-  - Irregular polygon shapes or sprite assets
-  - Slight color variation per asteroid
-- [ ] Basic lighting/shadow pass
-  - Ambient glow around ships
-  - Subtle shadow under ships on asteroid surfaces
-- [ ] Minimap overlay (no fog of war yet)
-  - Small corner overlay showing full map
-  - Dots for ships (team-colored), circles for objective zones
+- [x] Ship rendering: Mesh2d triangles with team color, rotation via `FrameInterpolate`
+- [x] Asteroid meshes: 7-sided polygons with per-entity color variation
+- [x] Minimap overlay (bottom-right corner)
+  - Map boundary circle, objective zone circles, ship dots (team-colored)
   - Camera viewport rectangle indicator
-  - Asteroid silhouettes (optional, may be too noisy)
+  - Clipped to minimap bounds
+- [ ] Ship sprites: replace placeholder triangles with proper ship sprites/meshes (deferred to Phase 5)
+- [ ] Basic lighting/shadow pass (deferred to Phase 5)
 
 ### 2.3 HUD
 
-- [x] Coordinate display (bottom center)
-- [ ] Ship health bar
-  - Replicate HP component from server
-  - Visual bar under ship or in HUD corner
-- [ ] Fuel gauge (for afterburner)
-  - Replicate fuel component, show consumption/regen
+- [x] Health bar (HP) with red fill, bottom-left
+- [x] Fuel gauge (FU) with blue fill, afterburner consumption/regen system
+- [x] Speed indicator + coordinate display
 - [ ] Ammo indicator (per weapon, deferred until Phase 3)
-- [ ] Afterburner heat/cooldown indicator
-- [ ] Team color indicators (red/blue) on HUD and ship labels
-- [ ] Speed indicator (current velocity magnitude)
+- [ ] Team color indicators on HUD and ship labels (deferred)
 - [ ] Kill feed / event log (deferred until Phase 3)
 
 **Phase 2 is complete when:** Players fly around a circular map with asteroids, parallax background, minimap, and a basic HUD showing health/fuel/speed.
@@ -275,9 +259,9 @@ Defenses activate when objective is captured, deactivate when neutral/enemy-owne
 
 ## Current Progress
 
-```
+```text
 Phase 1: Foundation ✅ ─── project structure → networking → ship movement
-Phase 2: World 🔧 ─────── map (boundary ✅, asteroids ❌) → visuals (starfield ✅, sprites ❌) → HUD (coords ✅, rest ❌)
+Phase 2: World ✅ ─────── asteroids ✅ → tridrants ✅ → minimap ✅ → HUD ✅ → fuel system ✅
 Phase 3: Combat ❌ ─────── weapons framework → 5 ship classes → selection
 Phase 4: Objectives ❌ ─── capture zones → defenses → benefits → win condition
 Phase 5: Game Feel 🔧 ─── thruster particles ✅ → fog/VFX/audio ❌ → collision polish ❌
@@ -287,22 +271,25 @@ Phase 6: Polish ❌ ─────── lobby → balance → infrastructure �
 ### What's done
 
 - 4-crate workspace with Bevy 0.18, Lightyear 0.26, Avian2D 0.5
-- Full Newtonian flight model: thrust, strafe, rotate, afterburner, stabilize
+- Full Newtonian flight model: thrust, strafe, rotate, afterburner (with fuel), stabilize
 - Server-authoritative networking with client prediction and interpolation
 - Rollback thresholds to prevent jinking on low-latency connections
-- Ship-ship collision with restitution
+- Ship-ship and ship-asteroid collision with restitution
+- 80 deterministic asteroids (4 size variants, seeded layout, replicated)
+- 3 tridrant sector lines + 3 objective zone circles
 - Parallax starfield (4 layers, infinite wrapping)
 - HDR particle system (thruster flames with bloom, halos, embers)
-- Circular map boundary with soft zone + reflection
-- Coordinate HUD
-- WASM/browser proof of concept via Trunk + WebTransport
+- Circular map boundary (radius 6000) with soft zone + reflection
+- Minimap with boundary, objective zones, ship dots, and viewport rectangle
+- HUD: health bar, fuel gauge (consumption + regen), speed + coordinates
+- WASM/browser support via Trunk + WebTransport (Chrome/Edge)
 
-### Next up (Phase 2 remaining)
+### Next up (Phase 3: Combat)
 
-1. Asteroid obstacles (static rigid bodies, various sizes)
-2. Tridrant sector markings and objective zone positions
-3. Ship sprites (replace placeholder hexagons)
-4. Minimap overlay
-5. Health/fuel/speed HUD elements
+1. Projectile entity framework (spawn, replicate, lifetime, collision)
+2. Hit detection + damage application + ship destruction
+3. Interceptor class: autocannon + mines
+4. Ship class selection UI
+5. Remaining 4 ship classes
 
 Each phase builds on the previous. Phases are playable milestones — after each one, the game is testable and demonstrable at that level of completeness.

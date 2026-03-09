@@ -7,8 +7,9 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 use lightyear::webtransport::prelude::{Identity, server::WebTransportServerIo};
 
+use avian2d::prelude::*;
 use btl_protocol::*;
-use btl_shared::ShipBundle;
+use btl_shared::{Asteroid, ShipBundle, generate_asteroid_layout};
 
 pub struct ServerPlugin;
 
@@ -18,7 +19,7 @@ impl Plugin for ServerPlugin {
             tick_duration: Duration::from_secs_f64(1.0 / FIXED_TIMESTEP_HZ),
         });
 
-        app.add_systems(Startup, start_server);
+        app.add_systems(Startup, (start_server, spawn_asteroids));
         app.add_observer(handle_new_client_link);
         app.add_observer(handle_client_connected);
     }
@@ -124,4 +125,21 @@ fn handle_client_connected(
     )).id();
 
     info!("Spawned ship entity {ship:?} for {peer_id:?} at {spawn_pos}");
+}
+
+/// Spawn static asteroid obstacles from the deterministic layout.
+fn spawn_asteroids(mut commands: Commands) {
+    let layout = generate_asteroid_layout();
+    for (pos, radius, rotation) in &layout {
+        commands.spawn((
+            Asteroid { radius: *radius },
+            RigidBody::Static,
+            Collider::circle(*radius),
+            Restitution::new(0.9),
+            Position(*pos),
+            Rotation::radians(*rotation),
+            Replicate::to_clients(NetworkTarget::All),
+        ));
+    }
+    info!("Spawned {} asteroids", layout.len());
 }

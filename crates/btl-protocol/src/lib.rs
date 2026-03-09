@@ -26,6 +26,46 @@ pub enum Team {
     Blue,
 }
 
+/// Marker for asteroid entities. Stores the radius for rendering/collision.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Asteroid {
+    pub radius: f32,
+}
+
+/// Ship health points.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Health {
+    pub current: f32,
+    pub max: f32,
+}
+
+impl Health {
+    pub fn new(max: f32) -> Self {
+        Self { current: max, max }
+    }
+
+    pub fn fraction(&self) -> f32 {
+        if self.max > 0.0 { self.current / self.max } else { 0.0 }
+    }
+}
+
+/// Afterburner fuel.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Fuel {
+    pub current: f32,
+    pub max: f32,
+}
+
+impl Fuel {
+    pub fn new(max: f32) -> Self {
+        Self { current: max, max }
+    }
+
+    pub fn fraction(&self) -> f32 {
+        if self.max > 0.0 { self.current / self.max } else { 0.0 }
+    }
+}
+
 // --- Inputs ---
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Reflect)]
@@ -59,5 +99,8 @@ impl Plugin for ProtocolPlugin {
         // Game components (prediction is added in btl-shared where the feature is available)
         app.register_component::<PlayerId>();
         app.register_component::<Team>();
+        app.register_component::<Asteroid>();
+        app.register_component::<Health>();
+        app.register_component::<Fuel>();
     }
 }

@@ -57,6 +57,7 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 
 ### Interceptor
 
+- **Shape:** Narrow dart — long pointed nose, swept-back wings forming a shallow V, twin engine nubs at the rear. Smallest silhouette from the front, widest when banking. Reads as fast even when stationary.
 - **Primary:** Rapid-fire autocannon (player aimed)
 - **Secondary:** Deployable mines (drop behind)
 - **Utility:** Afterburner
@@ -64,6 +65,7 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 
 ### Gunship
 
+- **Shape:** Blocky hexagon — wide, flat hull with canted side panels like armored skirts. Three visible turret hardpoints (one dorsal, two flanking). Stubby front profile, broad shoulders. Reads as tough and grounded.
 - **Primary:** 1 heavy cannon (player controlled)
 - **Secondary:** 3 autonomous turrets (auto-target enemies, imperfect accuracy)
 - **Utility:** Afterburner
@@ -71,6 +73,7 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 
 ### Torpedo Boat
 
+- **Shape:** Elongated wedge — rectangular main hull tapering to a flat bow, with two torpedo rack pods mounted on short pylons to either side. Slightly asymmetric silhouette (laser emitter offset on the nose). Reads as purpose-built and industrial.
 - **Primary:** Weak continuous laser (player aimed, low DPS)
 - **Secondary:** Lock-on tracking torpedoes (slow, dodgeable by agile ships, heavy damage)
 - **Utility:** Afterburner
@@ -78,6 +81,7 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 
 ### Sniper
 
+- **Shape:** Needle with fins — extremely long and thin, dominated by the railgun barrel running most of the body length. Two small stabilizer fins angled rearward. Minimal cross-section. Reads as fragile and precise, like a rifle with an engine.
 - **Primary:** Railgun (charge-up, long range, player aimed)
 - **Secondary:** Proximity mines
 - **Utility:** Cloak (short duration, broken by firing, NOT by taking damage, shimmer visible like inaccurate radar return)
@@ -85,11 +89,107 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 
 ### Drone Commander
 
+- **Shape:** Flat disc with arms — wide circular core hull with four radial arms extending outward, each tipped with a drone bay hatch. Defense laser emitters ring the central disc. Largest overall footprint of any ship. Reads as a mobile hive or carrier.
 - **Primary:** 5 auto-targeting defense lasers (weak, medium range, friendly-fire on own drones when crossing paths)
 - **Secondary:** 7 small attack drones (AI swarm behavior)
 - **Utility:** Anti-drone pulse (destroys all nearby drones, friend and foe)
 - **Drone resupply:** Slow passive rebuild (~1 per 8s), accelerated at captured objectives
 - **Best at:** Zone flooding, countering Factory, area control
+
+## Weapon Visuals
+
+### Projectile Weapons
+
+**Autocannon (Interceptor)**
+- **Projectile:** Small bright-yellow elongated pellets, ~4px long. Slight motion blur along travel direction.
+- **Muzzle flash:** Tiny orange-white flare at barrel tip, 1 frame duration.
+- **Impact:** Small yellow spark burst (4–6 particles, fast fade). On ship hit, adds a brief white damage flash on the target.
+- **Trail:** None — pellets are fast enough that the stream of projectiles itself reads as a tracer line.
+
+**Heavy Cannon (Gunship)**
+- **Projectile:** Larger glowing orange-red round, ~8px diameter, with a faint bloom halo. Visible rotation spin.
+- **Muzzle flash:** Bright orange flare with a brief expanding ring, slightly larger than autocannon flash.
+- **Impact:** Medium explosion burst — orange sparks radiating outward, brief flash, faint expanding shockwave ring.
+- **Trail:** Short warm-orange smoke trail that dissipates over ~0.3s.
+
+**Auto-Turrets (Gunship)**
+- **Projectile:** Small green-tinted rounds, ~3px, dimmer than the heavy cannon. Rapid cadence creates a stuttered stream.
+- **Muzzle flash:** Tiny green-white flicker at each turret hardpoint.
+- **Impact:** Small green spark burst, less dramatic than the main cannon.
+- **Trail:** None.
+
+### Beam Weapons
+
+**Continuous Laser (Torpedo Boat)**
+- **Beam:** Thin pale-blue line connecting emitter to target/max range. Inner bright core (~1px) with softer outer glow (~4px). Slight flicker/wobble to feel alive.
+- **Origin:** Small blue lens flare at the offset nose emitter.
+- **Impact point:** Bright blue-white hotspot on the target surface, with tiny sparks spraying perpendicular to the beam.
+- **No beam:** When not firing, the emitter has a dim idle glow.
+
+**Railgun (Sniper)**
+- **Charge-up:** Bright cyan-white glow builds along the barrel over 2s, with small electric arcs crawling the hull. Intensity increases exponentially — faint at start, blinding at peak.
+- **Beam:** Instantaneous thick cyan-white line spanning the full range, ~6px wide core with wide bloom. Screen-space effect — briefly washes out nearby colors. Lasts ~0.15s then rapidly fades.
+- **Impact:** Large cyan flash at hit point, expanding ring, electric arc debris. On miss, the beam terminates at max range with a faint dissipation flicker.
+- **Cooldown:** Barrel glows dim cyan, fading over the 5s cooldown. Ship appears "spent."
+
+**Defense Lasers (Drone Commander)**
+- **Beam:** Thin red-orange lines, ~1px core, minimal glow. Multiple beams firing simultaneously create a web-like visual around the disc hull.
+- **Origin:** Small red pinprick at each emitter node ringing the central disc.
+- **Impact:** Tiny red spark at contact point. Understated — these are suppression weapons, not spectacle.
+
+### Tracking Weapons
+
+**Torpedoes (Torpedo Boat)**
+- **Body:** Elongated dark metallic shape, ~12px long, with a bright red-orange engine glow at the rear.
+- **Trail:** Thick warm-orange smoke/exhaust trail that lingers for ~1.5s, curving visibly as the torpedo turns. The trail is the torpedo's most distinctive visual — makes tracking paths readable.
+- **Lock-on indicator:** Targeted ship sees a flashing red diamond reticle and warning pulse while torpedo is homing.
+- **Detonation:** Large orange-red explosion — expanding fireball, ring shockwave, scattered debris particles. Larger and more dramatic than cannon impacts.
+
+**Attack Drones (Drone Commander)**
+- **Body:** Tiny triangular shapes (~6px), colored slightly lighter than the owner's team color. Faint engine glow dot at rear.
+- **Formation:** Swarm movement — slightly jittery individual paths that loosely cluster. Reads as a buzzing cloud when grouped.
+- **Weapon fire:** Tiny rapid white-yellow pellets, minimal flash. Individually weak but visually overwhelming when 7 drones focus-fire.
+- **Destruction:** Small pop — brief white flash, 2–3 tiny debris fragments, gone.
+
+### Deployables
+
+**Mines (Interceptor / Sniper)**
+- **Deploy:** Brief white flash on drop, mine inherits ship velocity then decelerates to stationary.
+- **Idle:** Small dark sphere (~8px) with a slow-pulsing red core glow. Pulse rate increases when an enemy enters proximity range (serves as subtle warning for attentive players).
+- **Detonation:** Sharp red-white explosion, expanding ring, fast-fading. Similar intensity to a torpedo hit but more concentrated.
+
+### Abilities
+
+**Cloak (Sniper)**
+- **Activation:** Ship rapidly fades to near-invisible over ~0.3s, with a brief ripple distortion effect.
+- **Cloaked state:** Ship is a faint shimmer — a subtle refractive distortion, like heat haze. Barely visible against the starfield when stationary, slightly more visible when moving (distortion trails). Allies see a translucent ghost outline.
+- **Decloak:** Reverse ripple effect, ship fades back in over ~0.2s. Firing while cloaked forces an instant decloak with a brighter flash.
+
+**Anti-Drone Pulse (Drone Commander)**
+- **Charge:** Brief inward energy gather — particles pull toward the disc center over ~0.3s.
+- **Pulse:** Expanding cyan-white ring emanating from the ship, ~400 unit radius, rapid expansion. All drones caught in the ring spark and pop.
+- **Aftermath:** Faint lingering static/interference shimmer in the pulse area for ~1s.
+
+**Afterburner (All Ships)**
+- **Visual:** Enhanced thruster output — flame particles become longer, brighter, and shift from orange to blue-white at peak intensity. Bloom increases. Ship leaves a brief bright trail.
+- **Fuel depletion:** As fuel runs low, afterburner flame sputters — intermittent flickers, less stable output, until it cuts out entirely.
+
+### Objective Defense Visuals
+
+**Factory Drones**
+- **Explosive (kamikaze):** Small bright-red pulsing shapes, slightly larger than attack drones (~8px). Trail of red-orange sparks when charging toward a target. Detonation is a sharp red AoE flash.
+- **Laser drones:** Small shapes with a visible forward-facing emitter dot. Fire thin red beams similar to Drone Commander defense lasers. Orbit in loose formation around the Factory zone.
+
+**Railgun Turret**
+- **Structure:** Fixed turret base at zone center, rotating barrel assembly. Barrel visually tracks the current target.
+- **Telegraph:** Same charge-up glow as the Sniper railgun but larger scale — the turret barrel glows brighter cyan, then the tracking stops (barrel freezes direction) for 0.5s before firing. The freeze is the dodge window.
+- **Beam:** Same as Sniper railgun beam but thicker and brighter.
+
+**Powerplant Shield**
+- **Idle:** Translucent dome/bubble, team-colored tint (subtle), with slow-moving hexagonal grid pattern across the surface. Faint hum glow at the base.
+- **Projectile deflection:** Brief bright flash at impact point, ripple propagates across the shield surface. Deflected bullet bounces off with a spark.
+- **Laser attenuation:** Beam visibly dims and scatters as it passes through the shield — entry point glows.
+- **Torpedo detonation:** Large explosion effect on the shield surface, dramatic ripple across the entire dome, brief opacity increase. The shield absorbs it but visibly shudders.
 
 ## Physics and Combat Rules
 
