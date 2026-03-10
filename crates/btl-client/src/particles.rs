@@ -272,7 +272,7 @@ fn spawn_thruster_particles(
     }
 
     let rcs_count = (count / 5).max(1);
-    let ang = ang_vel.0 as f32;
+    let ang = ang_vel.0;
     let at_max_spin = ang.abs() >= btl_shared::SHIP_MAX_ANGULAR_SPEED - 0.1;
 
     // Strafe thrusters — scale by magnitude, deadzone at 0.1
@@ -357,7 +357,7 @@ fn spawn_thruster_particles(
             spawn_cone(bl, -right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
         }
 
-        let ang = ang_vel.0 as f32;
+        let ang = ang_vel.0;
         if ang.abs() > 0.05 {
             if ang > 0.0 {
                 let lf = ship_pos + forward * SHIP_RADIUS * 0.8 - right * SHIP_RADIUS * 0.6;

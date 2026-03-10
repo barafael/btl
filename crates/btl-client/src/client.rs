@@ -43,6 +43,12 @@ struct MineInitialized;
 #[derive(Component)]
 struct GunBarrel;
 
+// --- Query filter aliases (tame clippy::type_complexity) ---
+
+type UninitPredicted = (With<Predicted>, Without<ShipInitialized>);
+type UninitInterpolated = (With<Interpolated>, Without<ShipInitialized>);
+type GunBarrelFilter = (With<GunBarrel>, Without<LocalShip>);
+
 // --- Route planning ---
 
 const ROUTE_ZOOM_SCALE: f32 = 4.0;
@@ -324,10 +330,7 @@ fn log_connected(trigger: On<Add, Connected>, query: Query<(), With<Client>>) {
 /// Initialize rendering for predicted ships once their components are synced.
 fn init_predicted_ships(
     mut commands: Commands,
-    query: Query<
-        (Entity, &PlayerId, &Team, Has<Controlled>),
-        (With<Predicted>, Without<ShipInitialized>),
-    >,
+    query: Query<(Entity, &PlayerId, &Team, Has<Controlled>), UninitPredicted>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -397,7 +400,7 @@ fn init_predicted_ships(
 /// Initialize rendering for interpolated (remote) ships.
 fn init_interpolated_ships(
     mut commands: Commands,
-    query: Query<(Entity, &PlayerId, &Team), (With<Interpolated>, Without<ShipInitialized>)>,
+    query: Query<(Entity, &PlayerId, &Team), UninitInterpolated>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -551,32 +554,17 @@ struct MineShadow {
     parent: Entity,
 }
 
+type MineCoreFilter = (Without<MineInitialized>, Without<MineShadow>);
+type MineShadowFilter = (Without<MineInitialized>, Without<MineCore>);
+type ShipForMineFilter = (With<ShipInitialized>, Without<MineInitialized>, Without<MineCore>, Without<MineShadow>);
+
 /// Pulse mine cores, position shadows, proximity warning, and clean up orphaned children.
 fn update_mine_visuals(
     mut commands: Commands,
     mines: Query<(Entity, &Mine, &Transform), With<MineInitialized>>,
-    mut cores: Query<
-        (
-            Entity,
-            &MineCore,
-            &mut Transform,
-            &mut MeshMaterial2d<ColorMaterial>,
-        ),
-        (Without<MineInitialized>, Without<MineShadow>),
-    >,
-    mut shadows: Query<
-        (Entity, &MineShadow, &mut Transform),
-        (Without<MineInitialized>, Without<MineCore>),
-    >,
-    ships: Query<
-        (&Transform, &Team),
-        (
-            With<ShipInitialized>,
-            Without<MineInitialized>,
-            Without<MineCore>,
-            Without<MineShadow>,
-        ),
-    >,
+    mut cores: Query<(Entity, &MineCore, &mut Transform, &mut MeshMaterial2d<ColorMaterial>), MineCoreFilter>,
+    mut shadows: Query<(Entity, &MineShadow, &mut Transform), MineShadowFilter>,
+    ships: Query<(&Transform, &Team), ShipForMineFilter>,
     time: Res<Time>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -659,6 +647,10 @@ struct FuelBarFill;
 
 #[derive(Component)]
 struct AmmoBarFill;
+
+type HealthBarFilter = (With<HealthBarFill>, Without<FuelBarFill>, Without<AmmoBarFill>, Without<HudText>);
+type FuelBarFilter = (With<FuelBarFill>, Without<HealthBarFill>, Without<AmmoBarFill>, Without<HudText>);
+type AmmoBarFilter = (With<AmmoBarFill>, Without<HealthBarFill>, Without<FuelBarFill>, Without<HudText>);
 
 const BAR_WIDTH: f32 = 160.0;
 const BAR_HEIGHT: f32 = 10.0;
@@ -830,33 +822,9 @@ fn spawn_hud(mut commands: Commands) {
 fn update_hud(
     ship_query: Query<(&Transform, &Health, &Fuel, &Ammo, &LinearVelocity), With<LocalShip>>,
     mut text_query: Query<&mut Text, With<HudText>>,
-    mut health_bar: Query<
-        &mut Node,
-        (
-            With<HealthBarFill>,
-            Without<FuelBarFill>,
-            Without<AmmoBarFill>,
-            Without<HudText>,
-        ),
-    >,
-    mut fuel_bar: Query<
-        &mut Node,
-        (
-            With<FuelBarFill>,
-            Without<HealthBarFill>,
-            Without<AmmoBarFill>,
-            Without<HudText>,
-        ),
-    >,
-    mut ammo_bar: Query<
-        &mut Node,
-        (
-            With<AmmoBarFill>,
-            Without<HealthBarFill>,
-            Without<FuelBarFill>,
-            Without<HudText>,
-        ),
-    >,
+    mut health_bar: Query<&mut Node, HealthBarFilter>,
+    mut fuel_bar: Query<&mut Node, FuelBarFilter>,
+    mut ammo_bar: Query<&mut Node, AmmoBarFilter>,
 ) {
     let Ok((ship_tf, health, fuel, ammo, lin_vel)) = ship_query.single() else {
         return;
@@ -885,7 +853,7 @@ fn update_hud(
 /// Rotate the local ship's gun barrel toward the mouse cursor.
 fn update_gun_barrels(
     local_ship: Query<(Entity, &Transform, &ActionState<ShipInput>), With<LocalShip>>,
-    mut barrels: Query<(&ChildOf, &mut Transform), (With<GunBarrel>, Without<LocalShip>)>,
+    mut barrels: Query<(&ChildOf, &mut Transform), GunBarrelFilter>,
 ) {
     let Ok((ship_entity, ship_tf, input)) = local_ship.single() else {
         return;
@@ -1232,8 +1200,8 @@ fn route_planning_input(
     }
 
     // Left-click adds waypoint (with angle validation)
-    if planner.active && mouse_button.just_pressed(MouseButton::Left) {
-        if let Some(world_pos) = (|| {
+    if planner.active && mouse_button.just_pressed(MouseButton::Left)
+        && let Some(world_pos) = (|| {
             let window = windows.single().ok()?;
             let cursor_pos = window.cursor_position()?;
             let (camera, cam_gt) = camera_query.single().ok()?;
@@ -1247,24 +1215,22 @@ fn route_planning_input(
                 planner.last_rejected = true;
             }
         }
-    }
 
     // Right-click removes last waypoint
-    if planner.active && mouse_button.just_pressed(MouseButton::Right) {
-        if planner.waypoints.len() > 1 {
+    if planner.active && mouse_button.just_pressed(MouseButton::Right)
+        && planner.waypoints.len() > 1 {
             planner.waypoints.pop();
             planner.last_rejected = false;
             rebuild_route_path(&mut planner);
         }
-    }
 
     // On CTRL release, commit the route
     if ctrl_just_released && planner.active {
         planner.active = false;
         planner.target_zoom = 1.0;
 
-        if planner.path.len() >= 2 {
-            if let Ok((entity, _)) = ship_query.single() {
+        if planner.path.len() >= 2
+            && let Ok((entity, _)) = ship_query.single() {
                 let arc_lengths = compute_arc_lengths(&planner.path);
                 let speed_profile = compute_speed_profile(&planner.curvatures, &arc_lengths);
                 commands.entity(entity).insert(RouteFollowing {
@@ -1276,7 +1242,6 @@ fn route_planning_input(
                     cte_integral: 0.0,
                 });
             }
-        }
         planner.waypoints.clear();
         planner.path.clear();
         planner.curvatures.clear();
@@ -1371,8 +1336,8 @@ fn render_route_gizmos(
         }
 
         // Show rejection indicator: red X at cursor position
-        if planner.last_rejected {
-            if let Some(cursor_world) = (|| {
+        if planner.last_rejected
+            && let Some(cursor_world) = (|| {
                 let window = windows.single().ok()?;
                 let cursor_pos = window.cursor_position()?;
                 let (camera, cam_gt) = camera_query.single().ok()?;
@@ -1391,7 +1356,6 @@ fn render_route_gizmos(
                     red,
                 );
             }
-        }
     }
 }
 
@@ -1463,7 +1427,7 @@ fn route_follow(
         return;
     }
 
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f64 as f32;
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let ship_pos = ship_tf.translation.truncate();
     let speed = lin_vel.0.length();
 

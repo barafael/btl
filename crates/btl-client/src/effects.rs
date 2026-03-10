@@ -69,11 +69,10 @@ fn detect_despawned_effects(
     mut rng: ResMut<EffectRng>,
 ) {
     for entity in removed_projectiles.read() {
-        if let Some(&(pos, lifetime)) = cache.projectiles.get(&entity) {
-            if lifetime > 0.2 {
+        if let Some(&(pos, lifetime)) = cache.projectiles.get(&entity)
+            && lifetime > 0.2 {
                 spawn_impact_sparks(&mut commands, pos, &mut rng);
             }
-        }
     }
 
     for entity in removed_mines.read() {

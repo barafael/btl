@@ -128,7 +128,7 @@ fn main() {
 
 fn setup_camera(mut commands: Commands) {
     commands.spawn((
-        Camera2d::default(),
+        Camera2d,
         Bloom {
             intensity: 0.3,
             low_frequency_boost: 0.5,

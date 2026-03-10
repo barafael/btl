@@ -176,14 +176,14 @@ fn update_minimap_dots(
                 height: Val::Px(size),
                 ..default()
             },
-            BackgroundColor(color.into()),
+            BackgroundColor(color),
         ));
     }
 
     // Update viewport rectangle
-    if let Ok((cam_tf, projection)) = camera_query.single() {
-        if let Projection::Orthographic(ortho) = projection {
-            if let Ok(mut node) = viewport.single_mut() {
+    if let Ok((cam_tf, projection)) = camera_query.single()
+        && let Projection::Orthographic(ortho) = projection
+            && let Ok(mut node) = viewport.single_mut() {
                 let cam_x = cam_tf.translation.x;
                 let cam_y = cam_tf.translation.y;
                 let half_w = ortho.area.width() / 2.0;
@@ -199,6 +199,4 @@ fn update_minimap_dots(
                 node.width = Val::Px(vp_w);
                 node.height = Val::Px(vp_h);
             }
-        }
-    }
 }
