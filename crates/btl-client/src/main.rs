@@ -10,6 +10,7 @@ mod starfield;
 use std::net::SocketAddr;
 
 use bevy::log::LogPlugin;
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 use btl_protocol::SERVER_PORT;
@@ -55,7 +56,11 @@ fn parse_config() -> (u64, SocketAddr, String) {
     let params = web_sys::window()
         .and_then(|w| w.location().search().ok())
         .unwrap_or_default();
-    let mut id = 1u64;
+    let mut id = {
+        let mut buf = [0u8; 8];
+        getrandom::getrandom(&mut buf).unwrap_or_default();
+        u64::from_le_bytes(buf)
+    };
     let mut server = default_server_addr();
     let mut cert = String::new();
     for param in params.trim_start_matches('?').split('&') {
@@ -136,12 +141,15 @@ fn main() {
 }
 
 fn setup_camera(mut commands: Commands) {
+    let projection = Projection::Orthographic(OrthographicProjection {
+        scale: 2.4,
+        ..OrthographicProjection::default_2d()
+    });
+
+    #[cfg(not(target_arch = "wasm32"))]
     commands.spawn((
         Camera2d,
-        Projection::Orthographic(OrthographicProjection {
-            scale: 2.4,
-            ..OrthographicProjection::default_2d()
-        }),
+        projection,
         Bloom {
             intensity: 0.3,
             low_frequency_boost: 0.5,
@@ -155,6 +163,9 @@ fn setup_camera(mut commands: Commands) {
             ..Bloom::NATURAL
         },
     ));
+
+    #[cfg(target_arch = "wasm32")]
+    commands.spawn((Camera2d, projection));
 }
 
 /// Draw dotted lines from center to boundary for each tridrant division.
