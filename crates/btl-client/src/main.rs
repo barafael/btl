@@ -138,6 +138,10 @@ fn main() {
 fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera2d,
+        Projection::Orthographic(OrthographicProjection {
+            scale: 2.0,
+            ..OrthographicProjection::default_2d()
+        }),
         Bloom {
             intensity: 0.3,
             low_frequency_boost: 0.5,

@@ -515,7 +515,9 @@ fn server_fire_laser(
         }
 
         if let Some(entity) = best_entity {
-            hits.push((entity, LASER_DPS * dt));
+            // Damage falls off with distance (full at 0, 30% at max range)
+            let falloff = 1.0 - 0.7 * (best_t / LASER_RANGE);
+            hits.push((entity, LASER_DPS * falloff * dt));
         }
     }
 
@@ -944,14 +946,24 @@ fn server_drone_respawn(
 
 /// Drone AI: chase nearest enemy within aggro range, or orbit the commander.
 fn server_drone_ai(
-    mut drones: Query<(&Drone, &Position, &mut LinearVelocity), Without<DroneSquad>>,
+    mut drones: Query<(Entity, &Drone, &Position, &mut LinearVelocity), Without<DroneSquad>>,
     enemies: Query<(&Position, &Team), With<Health>>,
     commanders: Query<(&PlayerId, &Position, &LinearVelocity), With<DroneSquad>>,
+    time: Res<Time>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let steer_rate = 6.0 * dt;
+    let elapsed = time.elapsed_secs();
 
-    for (drone, drone_pos, mut drone_vel) in drones.iter_mut() {
+    for (drone_entity, drone, drone_pos, mut drone_vel) in drones.iter_mut() {
+        // Per-drone jitter from entity bits — each drone drifts differently
+        let seed = drone_entity.to_bits().wrapping_mul(2654435761);
+        let phase = (seed % 1000) as f32 * 0.001 * std::f32::consts::TAU;
+        let jitter = Vec2::new(
+            (elapsed * 1.3 + phase).sin() * 80.0,
+            (elapsed * 1.7 + phase * 1.4).cos() * 80.0,
+        );
+
         // Find nearest enemy within aggro range
         let mut best_dist_sq = DRONE_AGGRO_RANGE * DRONE_AGGRO_RANGE;
         let mut nearest_enemy: Option<Vec2> = None;
@@ -975,7 +987,6 @@ fn server_drone_ai(
         let desired_vel = match drone.kind {
             DroneKind::Kamikaze => {
                 if let Some(target) = nearest_enemy {
-                    // Kamikaze: full speed charge at enemy
                     let delta = target - drone_pos.0;
                     let dist = delta.length();
                     if dist > 1.0 {
@@ -984,8 +995,7 @@ fn server_drone_ai(
                         drone_vel.0
                     }
                 } else {
-                    // No enemy: orbit commander like laser drones
-                    orbit_commander(drone_pos.0, &drone_vel.0, commander_data, DRONE_SPEED)
+                    swarm_commander(drone_pos.0, commander_data, DRONE_SPEED, jitter)
                 }
             }
             DroneKind::Laser => {
@@ -993,18 +1003,16 @@ fn server_drone_ai(
                     let delta = target - drone_pos.0;
                     let dist = delta.length();
                     if dist > DRONE_LASER_RANGE * 0.8 {
-                        // Move toward enemy to get in laser range
                         let chase_dir = delta / dist;
                         let base = commander_data.map(|(_, v)| v).unwrap_or(Vec2::ZERO);
-                        base + chase_dir * DRONE_SPEED
+                        base + chase_dir * DRONE_SPEED + jitter
                     } else {
-                        // In range: orbit near the enemy at laser range
-                        let tangent = Vec2::new(-delta.y, delta.x).normalize();
+                        // In range: swarm around target with jitter
                         let base = commander_data.map(|(_, v)| v).unwrap_or(Vec2::ZERO);
-                        base + tangent * DRONE_SPEED * 0.4
+                        base + jitter * 2.0
                     }
                 } else {
-                    orbit_commander(drone_pos.0, &drone_vel.0, commander_data, DRONE_SPEED)
+                    swarm_commander(drone_pos.0, commander_data, DRONE_SPEED, jitter)
                 }
             }
         };
@@ -1013,30 +1021,25 @@ fn server_drone_ai(
     }
 }
 
-/// Helper: compute orbit velocity around commander.
-fn orbit_commander(
+/// Swarm around commander with random jitter instead of deterministic orbit.
+fn swarm_commander(
     drone_pos: Vec2,
-    drone_vel: &Vec2,
     commander: Option<(Vec2, Vec2)>,
     speed: f32,
+    jitter: Vec2,
 ) -> Vec2 {
     if let Some((cmd_pos, cmd_vel)) = commander {
-        let to_drone = drone_pos - cmd_pos;
-        let dist = to_drone.length();
-        if dist < 1.0 {
-            cmd_vel + Vec2::new(speed * 0.3, 0.0)
-        } else if dist > DRONE_ORBIT_RADIUS * 1.5 {
-            let chase_dir = (cmd_pos - drone_pos).normalize();
+        let to_cmd = cmd_pos - drone_pos;
+        let dist = to_cmd.length();
+        if dist > DRONE_ORBIT_RADIUS * 2.0 {
+            let chase_dir = to_cmd / dist;
             cmd_vel + chase_dir * speed
         } else {
-            let tangent = Vec2::new(-to_drone.y, to_drone.x).normalize();
-            let radial = (DRONE_ORBIT_RADIUS - dist) * 0.05;
-            let inward = to_drone / dist * radial;
-            let orbit = (tangent * speed * 0.5 - inward * speed).normalize() * speed * 0.5;
-            cmd_vel + orbit
+            let pull = to_cmd * 0.5;
+            cmd_vel + (jitter + pull).clamp_length_max(speed * 0.6)
         }
     } else {
-        *drone_vel * 0.95
+        jitter.clamp_length_max(speed * 0.3)
     }
 }
 

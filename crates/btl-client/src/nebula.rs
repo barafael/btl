@@ -91,8 +91,8 @@ fn init_nebula(
         usage,
     ));
 
-    // World-space sprite: covers the entire map, behind everything
-    let map_diameter = MAP_RADIUS * 2.0;
+    // World-space sprite: covers the entire map + margin, behind everything
+    let map_diameter = MAP_RADIUS * 2.4; // slightly larger so edges fade before cutoff
     commands.spawn((
         NebulaSprite,
         Sprite {
@@ -170,18 +170,32 @@ fn animate_nebula(
     }
 }
 
-/// Render the nebula texture into an RGBA pixel buffer (fully opaque).
+/// Render the nebula texture into an RGBA pixel buffer with radial fade at edges.
 fn render_nebula_pixels(programs: &NebulaPrograms, t: f32) -> Vec<u8> {
     let size = (NEBULA_SIZE * NEBULA_SIZE * 4) as usize;
-    let mut pixels = vec![255u8; size];
+    let mut pixels = vec![0u8; size];
 
     for (i, chunk) in pixels.chunks_mut(4).enumerate() {
         let i = i as u32;
         let py = (i / NEBULA_SIZE) as f32 / NEBULA_SIZE as f32 * 2.0 - 1.0;
         let px = (i % NEBULA_SIZE) as f32 / NEBULA_SIZE as f32 * 2.0 - 1.0;
+
+        // Radial fade: full inside 0.7, smooth falloff to 0 at edge
+        let dist = (px * px + py * py).sqrt();
+        let alpha = if dist <= 0.7 {
+            1.0
+        } else if dist >= 1.0 {
+            0.0
+        } else {
+            let f = (dist - 0.7) / 0.3;
+            let f = f * f * (3.0 - 2.0 * f);
+            1.0 - f
+        };
+
         chunk[0] = nebula::channel(nebula::eval_program(&programs.r, px, py, t));
         chunk[1] = nebula::channel(nebula::eval_program(&programs.g, px, py, t));
         chunk[2] = nebula::channel(nebula::eval_program(&programs.b, px, py, t));
+        chunk[3] = (alpha * 255.0) as u8;
     }
 
     pixels

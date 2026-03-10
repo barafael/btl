@@ -54,7 +54,7 @@ pub const AUTOCANNON_SPEED: f32 = 800.0;
 /// Damage per hit
 pub const AUTOCANNON_DAMAGE: f32 = 8.0;
 /// Projectile lifetime in seconds
-pub const AUTOCANNON_LIFETIME: f32 = 1.5;
+pub const AUTOCANNON_LIFETIME: f32 = 2.0;
 /// Projectile collider radius
 pub const PROJECTILE_RADIUS: f32 = 3.0;
 /// Muzzle offset from ship center (spawn at ship edge)
@@ -95,7 +95,7 @@ pub const GUNSHIP_AMMO_REGEN: f32 = 1.0;
 pub const HEAVY_CANNON_COOLDOWN: f32 = 0.667; // ~1.5 rounds/s
 pub const HEAVY_CANNON_SPEED: f32 = 600.0;
 pub const HEAVY_CANNON_DAMAGE: f32 = 35.0;
-pub const HEAVY_CANNON_LIFETIME: f32 = 2.5;
+pub const HEAVY_CANNON_LIFETIME: f32 = 3.0;
 pub const HEAVY_CANNON_AMMO_COST: f32 = 3.0;
 pub const HEAVY_PROJECTILE_RADIUS: f32 = 5.0;
 pub const HEAVY_MUZZLE_OFFSET: f32 = GUNSHIP_RADIUS + HEAVY_PROJECTILE_RADIUS + 2.0;
@@ -107,7 +107,7 @@ pub const TURRET_COOLDOWN: f32 = 0.333; // ~3 rounds/s
 pub const TURRET_SPEED: f32 = 700.0;
 pub const TURRET_DAMAGE: f32 = 5.0;
 pub const TURRET_LIFETIME: f32 = 1.0;
-pub const TURRET_RANGE: f32 = 700.0;
+pub const TURRET_RANGE: f32 = 1000.0;
 /// Max turret rotation speed (radians/sec)
 pub const TURRET_SLEW_RATE: f32 = 4.0;
 /// Angle tolerance for firing (radians)
@@ -134,7 +134,7 @@ pub const TBOAT_AMMO_REGEN: f32 = 3.0;
 
 // --- Laser (Torpedo Boat primary, continuous beam) ---
 
-pub const LASER_RANGE: f32 = 500.0;
+pub const LASER_RANGE: f32 = 800.0;
 pub const LASER_DPS: f32 = 20.0;
 /// Ammo consumed per second while laser is firing
 pub const LASER_AMMO_COST: f32 = 5.0;
@@ -202,7 +202,7 @@ pub const DEFENSE_TURRET_COOLDOWN: f32 = 0.5;
 pub const DEFENSE_TURRET_SPEED: f32 = 600.0;
 pub const DEFENSE_TURRET_DAMAGE: f32 = 3.0;
 pub const DEFENSE_TURRET_LIFETIME: f32 = 0.8;
-pub const DEFENSE_TURRET_RANGE: f32 = 500.0;
+pub const DEFENSE_TURRET_RANGE: f32 = 750.0;
 pub const DEFENSE_TURRET_SLEW_RATE: f32 = 5.0;
 pub const DEFENSE_TURRET_FIRE_TOLERANCE: f32 = 0.2;
 pub const DEFENSE_TURRET_PROJECTILE_RADIUS: f32 = 2.0;
@@ -223,15 +223,31 @@ pub const DRONE_KAMIKAZE_COUNT: usize = 3;
 pub const DRONE_MAX_COUNT: usize = DRONE_LASER_COUNT + DRONE_KAMIKAZE_COUNT;
 pub const DRONE_RADIUS: f32 = 6.0;
 pub const DRONE_SPEED: f32 = 500.0;
-pub const DRONE_AGGRO_RANGE: f32 = 800.0;
+pub const DRONE_AGGRO_RANGE: f32 = 1200.0;
 pub const DRONE_ORBIT_RADIUS: f32 = 80.0;
 pub const DRONE_RESPAWN_TIME: f32 = 8.0;
 // Laser drone stats
-pub const DRONE_LASER_HEALTH: f32 = 25.0;
-pub const DRONE_LASER_RANGE: f32 = 350.0;
-pub const DRONE_LASER_DPS: f32 = 6.0;
+pub const DRONE_LASER_HEALTH: f32 = 12.0;
+pub const DRONE_LASER_RANGE: f32 = 500.0;
+pub const DRONE_LASER_DPS: f32 = 15.0; // higher to compensate for pulsed firing
+pub const DRONE_LASER_BURST: f32 = 0.25; // seconds firing per burst
+pub const DRONE_LASER_PAUSE_MIN: f32 = 0.4;
+pub const DRONE_LASER_PAUSE_MAX: f32 = 0.9;
+
+/// Erratic pulse pattern for drone lasers. Each drone gets a unique rhythm
+/// based on entity bits, producing irregular short bursts.
+pub fn drone_laser_firing(entity_bits: u64, elapsed_secs: f32) -> bool {
+    let seed = entity_bits.wrapping_mul(2654435761);
+    let phase1 = (seed % 1000) as f32 * 0.001;
+    let phase2 = ((seed >> 16) % 1000) as f32 * 0.001;
+    let cycle = DRONE_LASER_BURST + (DRONE_LASER_PAUSE_MIN + DRONE_LASER_PAUSE_MAX) * 0.5;
+    let wave1 = ((elapsed_secs / cycle + phase1) * std::f32::consts::TAU).sin();
+    let wave2 = ((elapsed_secs / cycle * 1.7 + phase2) * std::f32::consts::TAU).sin();
+    wave1 > 0.2 && wave2 > -0.3
+}
+
 // Kamikaze drone stats
-pub const DRONE_KAMIKAZE_HEALTH: f32 = 15.0;
+pub const DRONE_KAMIKAZE_HEALTH: f32 = 8.0;
 pub const DRONE_KAMIKAZE_DAMAGE: f32 = 40.0;
 pub const DRONE_KAMIKAZE_SPEED: f32 = 600.0;
 
@@ -715,15 +731,30 @@ fn update_projectile_lifetime(
     }
 }
 
-/// Tick mine arm timers and lifetime. Despawn expired mines.
-fn update_mine_lifetime(mut commands: Commands, mut query: Query<(Entity, &mut Mine)>) {
+/// Tick mine arm timers and lifetime. Detonate expired mines (damage nearby enemies).
+fn update_mine_lifetime(
+    mut commands: Commands,
+    mut mines: Query<(Entity, &mut Mine, &Position)>,
+    mut ships: Query<(&Position, &Team, &mut Health)>,
+) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
-    for (entity, mut mine) in query.iter_mut() {
+    let trigger_dist_sq = MINE_TRIGGER_RADIUS * MINE_TRIGGER_RADIUS;
+
+    for (entity, mut mine, mine_pos) in mines.iter_mut() {
         if mine.arm_timer > 0.0 {
             mine.arm_timer = (mine.arm_timer - dt).max(0.0);
         }
         mine.lifetime -= dt;
         if mine.lifetime <= 0.0 {
+            // Detonate on expiry — damage nearby enemies
+            for (ship_pos, ship_team, mut health) in ships.iter_mut() {
+                if *ship_team == mine.owner_team {
+                    continue;
+                }
+                if (mine_pos.0 - ship_pos.0).length_squared() < trigger_dist_sq {
+                    health.current = (health.current - mine.damage).max(0.0);
+                }
+            }
             commands.entity(entity).despawn();
         }
     }
@@ -1003,20 +1034,23 @@ pub fn check_projectile_drone_hits(
     }
 }
 
-/// Drones deal contact DPS to enemy ships when overlapping.
-/// Laser drones apply continuous DPS to nearest enemy within range.
+/// Laser drones fire erratic pulsed beams at nearest enemy within range.
 pub fn drone_laser_damage(
-    drones: Query<(&Drone, &Position)>,
+    drones: Query<(Entity, &Drone, &Position)>,
     mut ships: Query<(Entity, &Position, &Team, &mut Health)>,
+    time: Res<Time>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let range_sq = DRONE_LASER_RANGE * DRONE_LASER_RANGE;
+    let elapsed = time.elapsed_secs();
 
-    // Collect (target_entity, damage) to avoid borrow conflicts
     let mut hits: Vec<(Entity, f32)> = Vec::new();
 
-    for (drone, drone_pos) in drones.iter() {
+    for (drone_entity, drone, drone_pos) in drones.iter() {
         if drone.kind != DroneKind::Laser {
+            continue;
+        }
+        if !drone_laser_firing(drone_entity.to_bits(), elapsed) {
             continue;
         }
         let mut best_dist_sq = range_sq;
@@ -1032,7 +1066,9 @@ pub fn drone_laser_damage(
             }
         }
         if let Some(target) = best_target {
-            hits.push((target, DRONE_LASER_DPS * dt));
+            let dist = best_dist_sq.sqrt();
+            let falloff = 1.0 - 0.7 * (dist / DRONE_LASER_RANGE);
+            hits.push((target, DRONE_LASER_DPS * falloff * dt));
         }
     }
 

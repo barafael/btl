@@ -16,7 +16,7 @@ use avian2d::prelude::*;
 use btl_protocol::*;
 use btl_shared::{
     Ammo, Asteroid, Cloak, DCOMMANDER_MASS, DCOMMANDER_RADIUS, DEFENSE_TURRET_MOUNTS,
-    DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind, FrameInterpolate, GUNSHIP_MASS,
+    DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind, FrameInterpolate, drone_laser_firing, GUNSHIP_MASS,
     GUNSHIP_RADIUS, LASER_RANGE, MINE_RADIUS, MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position,
     Projectile, RailgunCharge, Rotation, SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS,
     TBOAT_MASS, TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo, ray_circle_intersect,
@@ -565,11 +565,14 @@ fn log_connected(trigger: On<Add, Connected>, query: Query<(), With<Client>>) {
 /// Initialize rendering for predicted ships once their components are synced.
 fn init_predicted_ships(
     mut commands: Commands,
-    query: Query<(Entity, &PlayerId, &Team, &ShipClass, Has<Controlled>), UninitPredicted>,
+    query: Query<
+        (Entity, &PlayerId, &Team, &ShipClass, &Position, &Rotation, Has<Controlled>),
+        UninitPredicted,
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    for (entity, player_id, team, class, is_controlled) in query.iter() {
+    for (entity, player_id, team, class, pos, rot, is_controlled) in query.iter() {
         let (radius, mass) = match class {
             ShipClass::Interceptor => (SHIP_RADIUS, SHIP_MASS),
             ShipClass::Gunship => (GUNSHIP_RADIUS, GUNSHIP_MASS),
@@ -587,6 +590,8 @@ fn init_predicted_ships(
         commands.entity(entity).insert((
             Mesh2d(ship_mesh),
             MeshMaterial2d(materials.add(team_color(team))),
+            Transform::from_xyz(pos.0.x, pos.0.y, 0.0)
+                .with_rotation(Quat::from_rotation_z(rot.as_radians())),
             ShipInitialized,
             FrameInterpolate::<Position> {
                 trigger_change_detection: true,
@@ -632,11 +637,11 @@ fn init_predicted_ships(
 /// Initialize rendering for interpolated (remote) ships.
 fn init_interpolated_ships(
     mut commands: Commands,
-    query: Query<(Entity, &PlayerId, &Team, &ShipClass), UninitInterpolated>,
+    query: Query<(Entity, &PlayerId, &Team, &ShipClass, &Position, &Rotation), UninitInterpolated>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    for (entity, player_id, team, class) in query.iter() {
+    for (entity, player_id, team, class, pos, rot) in query.iter() {
         let radius = match class {
             ShipClass::Interceptor => SHIP_RADIUS,
             ShipClass::Gunship => GUNSHIP_RADIUS,
@@ -654,6 +659,8 @@ fn init_interpolated_ships(
         commands.entity(entity).insert((
             Mesh2d(ship_mesh),
             MeshMaterial2d(materials.add(team_color(team))),
+            Transform::from_xyz(pos.0.x, pos.0.y, 0.0)
+                .with_rotation(Quat::from_rotation_z(rot.as_radians())),
             ShipInitialized,
         ));
         spawn_gun_barrel(&mut commands, entity);
@@ -1011,18 +1018,22 @@ fn update_drone_visuals(
 
 /// Render thin laser beams from laser drones to their nearest enemy target.
 fn render_drone_lasers(
-    drones: Query<(&Drone, &Transform), With<DroneInitialized>>,
+    drones: Query<(Entity, &Drone, &Transform), With<DroneInitialized>>,
     enemies: Query<(&Transform, &Team), With<ShipInitialized>>,
     mut gizmos: Gizmos,
+    time: Res<Time>,
 ) {
-    for (drone, drone_tf) in drones.iter() {
+    let elapsed = time.elapsed_secs();
+    for (drone_entity, drone, drone_tf) in drones.iter() {
         if drone.kind != DroneKind::Laser {
+            continue;
+        }
+        if !drone_laser_firing(drone_entity.to_bits(), elapsed) {
             continue;
         }
         let drone_pos = drone_tf.translation.truncate();
         let range_sq = DRONE_LASER_RANGE * DRONE_LASER_RANGE;
 
-        // Find nearest enemy within laser range
         let mut best_dist_sq = range_sq;
         let mut best_pos = None;
         for (enemy_tf, enemy_team) in enemies.iter() {
@@ -1037,11 +1048,19 @@ fn render_drone_lasers(
         }
 
         if let Some(target_pos) = best_pos {
-            let color = match drone.owner_team {
+            let dist = (target_pos - drone_pos).length();
+            let fade = 1.0 - 0.7 * (dist / DRONE_LASER_RANGE);
+            let base = match drone.owner_team {
                 Team::Red => LinearRgba::new(1.5, 0.3, 0.2, 0.5),
                 Team::Blue => LinearRgba::new(0.2, 0.3, 1.5, 0.5),
             };
-            gizmos.line_2d(drone_pos, target_pos, Color::LinearRgba(color));
+            let faded = LinearRgba::new(
+                base.red * fade,
+                base.green * fade,
+                base.blue * fade,
+                base.alpha * fade,
+            );
+            gizmos.line_2d(drone_pos, target_pos, Color::LinearRgba(faded));
         }
     }
 }
@@ -1118,26 +1137,34 @@ fn render_laser_beams(
             }
         }
 
-        let end = ship_pos + aim_dir * best_t;
-
-        // Core beam (bright thin line)
-        gizmos.line_2d(
-            ship_pos,
-            end,
-            Color::LinearRgba(LinearRgba::new(2.0, 0.3, 0.3, 0.9)),
-        );
-        // Glow (wider, dimmer)
-        let offset = Vec2::new(-aim_dir.y, aim_dir.x) * 1.0;
-        gizmos.line_2d(
-            ship_pos + offset,
-            end + offset,
-            Color::LinearRgba(LinearRgba::new(1.0, 0.15, 0.1, 0.3)),
-        );
-        gizmos.line_2d(
-            ship_pos - offset,
-            end - offset,
-            Color::LinearRgba(LinearRgba::new(1.0, 0.15, 0.1, 0.3)),
-        );
+        // Draw beam as fading segments
+        let segments = 12;
+        let offset_dir = Vec2::new(-aim_dir.y, aim_dir.x);
+        for i in 0..segments {
+            let t0 = i as f32 / segments as f32;
+            let t1 = (i + 1) as f32 / segments as f32;
+            let p0 = ship_pos + aim_dir * (best_t * t0);
+            let p1 = ship_pos + aim_dir * (best_t * t1);
+            let fade = 1.0 - 0.8 * ((t0 + t1) * 0.5); // fade to 20% at end
+            // Core beam
+            gizmos.line_2d(
+                p0,
+                p1,
+                Color::LinearRgba(LinearRgba::new(2.0 * fade, 0.3 * fade, 0.3 * fade, 0.9 * fade)),
+            );
+            // Glow
+            let glow_a = 0.3 * fade;
+            gizmos.line_2d(
+                p0 + offset_dir,
+                p1 + offset_dir,
+                Color::LinearRgba(LinearRgba::new(1.0 * fade, 0.15 * fade, 0.1 * fade, glow_a)),
+            );
+            gizmos.line_2d(
+                p0 - offset_dir,
+                p1 - offset_dir,
+                Color::LinearRgba(LinearRgba::new(1.0 * fade, 0.15 * fade, 0.1 * fade, glow_a)),
+            );
+        }
     }
 }
 
