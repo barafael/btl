@@ -1725,6 +1725,9 @@ fn wrap_angle(mut a: f32) -> f32 {
 }
 
 /// Evaluate a Catmull-Rom spline through `points` at parameter `t` in [0, 1].
+/// Centripetal Catmull-Rom spline: smoother curvature transitions at waypoints
+/// compared to uniform Catmull-Rom. Uses alpha=0.5 (centripetal parameterization)
+/// which avoids cusps and self-intersections.
 fn catmull_rom_sample(points: &[Vec2], t: f32) -> Vec2 {
     let n = points.len();
     if n == 0 {
@@ -1751,13 +1754,32 @@ fn catmull_rom_sample(points: &[Vec2], t: f32) -> Vec2 {
         2.0 * points[n - 1] - points[n - 2]
     };
 
-    let t2 = local_t * local_t;
-    let t3 = t2 * local_t;
+    centripetal_catmull_rom(p0, p1, p2, p3, local_t)
+}
 
-    0.5 * ((2.0 * p1)
-        + (-p0 + p2) * local_t
-        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+/// Centripetal Catmull-Rom interpolation between p1 and p2 at parameter t in [0,1].
+/// Alpha = 0.5 gives centripetal parameterization (best curvature continuity).
+fn centripetal_catmull_rom(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f32) -> Vec2 {
+    fn knot_interval(a: Vec2, b: Vec2) -> f32 {
+        (b - a).length().sqrt().max(0.001)
+    }
+
+    // Knot values: k0=0, k1, k2, k3 spaced by sqrt(chord length)
+    let k1 = knot_interval(p0, p1);
+    let k2 = k1 + knot_interval(p1, p2);
+    let k3 = k2 + knot_interval(p2, p3);
+
+    let u = k1 + t * (k2 - k1);
+
+    // Barry-Goldman pyramid with explicit knot values
+    let a1 = p0 * ((k1 - u) / k1) + p1 * (u / k1);
+    let a2 = p1 * ((k2 - u) / (k2 - k1)) + p2 * ((u - k1) / (k2 - k1));
+    let a3 = p2 * ((k3 - u) / (k3 - k2)) + p3 * ((u - k2) / (k3 - k2));
+
+    let b1 = a1 * ((k2 - u) / k2) + a2 * (u / k2);
+    let b2 = a2 * ((k3 - u) / (k3 - k1)) + a3 * ((u - k1) / (k3 - k1));
+
+    b1 * ((k2 - u) / (k2 - k1)) + b2 * ((u - k1) / (k2 - k1))
 }
 
 /// Check if adding `candidate` as a new waypoint creates a turn that's too sharp.
@@ -1846,10 +1868,10 @@ fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
         .iter()
         .map(|&k| {
             if k > 0.001 {
-                // v_safe = ω_max / κ, with 0.6 margin to allow correction room
-                (SHIP_MAX_ANGULAR_SPEED * 0.6 / k).min(SHIP_MAX_SPEED * 0.85)
+                // v_safe = ω_max / κ, with 0.45 margin to allow correction room
+                (SHIP_MAX_ANGULAR_SPEED * 0.45 / k).min(SHIP_MAX_SPEED * 0.8)
             } else {
-                SHIP_MAX_SPEED * 0.85
+                SHIP_MAX_SPEED * 0.7
             }
         })
         .collect();
