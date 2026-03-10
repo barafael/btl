@@ -23,6 +23,7 @@
 
 - [x] Ship entity: `RigidBody::Dynamic`, zero damping, Avian2D collider
 - [x] Input: W/S thrust, A/D rotate, Q/E strafe, Shift afterburner, R stabilize
+- [x] Control scheme: **keyboard = thrusters** (movement), **mouse = weapons** (aim + fire)
 - [x] Server-authoritative physics: forces applied from client inputs
 - [x] Client-side prediction with rollback correction
 - [x] Interpolation: remote ships render smoothly
@@ -73,27 +74,27 @@
 
 ## Phase 3: Combat
 
-### 3.1 Weapon System Framework
+### 3.1 Weapon System Framework ✅
 
-- Projectile entity: replicated Position, LinearVelocity, lifetime timer, damage value, owner ID
-- Projectile collider: small circle sensor, collision events with ships
-- Hit detection: Avian2D collision events between projectile sensors and ship colliders
-- Damage application: reduce HP, clamp to 0
-- Ship destruction at 0 HP:
-  - Despawn ship entity
-  - Spawn drifting wreck entity (inherits velocity, 10s lifetime, fading alpha)
-  - Trigger respawn timer (5s), respawn at captured objective or default spawn
-- Projectile lifetime: despawn after max range/time
-- Muzzle offset: spawn projectiles at ship edge, not center (avoid self-collision)
+- [x] Projectile entity: replicated Position, LinearVelocity, lifetime timer, damage value, owner ID
+- [x] Hit detection: circle-circle overlap (server-authoritative, no physics engine)
+- [x] Damage application: reduce HP, clamp to 0
+- [x] Ship destruction at 0 HP: despawn + queue for respawn (3s timer)
+- [x] Respawn system: server-side queue, respawn at team-based positions
+- [x] Projectile lifetime: despawn after max time (shared system)
+- [x] Muzzle offset: spawn projectiles at ship edge, not center
+- [x] Fire cooldown: shared tick-down, server-authoritative firing
+- [x] Client rendering: HDR team-colored projectile circles (bloom-compatible)
+- [ ] Drifting wreck entity on destruction (deferred)
 
 ### 3.2 Ship Classes
 
 Implement one at a time, in this order:
 
-1. **Interceptor** — autocannon + mines + afterburner. Simplest weapons, good baseline.
-   - Autocannon: rapid-fire (8 rounds/s), low damage, medium range, slight spread
-   - Mines: drop behind ship (inherit ship velocity minus small backward offset), proximity detonation, 30s lifetime, max 5 active
-   - Standard afterburner
+1. **Interceptor** ✅ — autocannon + mines + afterburner. Simplest weapons, good baseline.
+   - [x] Autocannon: rapid-fire (8 rounds/s), low damage, medium range
+   - [x] Mines: drop behind ship (X key), proximity detonation (60u radius), 30s lifetime, max 5 active, 1s arm time
+   - [x] Standard afterburner (with fuel system)
 2. **Gunship** — heavy cannon (player) + 3 auto-turrets. Introduces autonomous targeting AI.
    - Heavy cannon: slow fire rate (1.5 rounds/s), high damage, long range, player-aimed
    - Auto-turrets: 3 turrets with independent targeting, medium fire rate, low damage, limited range
@@ -262,7 +263,7 @@ Defenses activate when objective is captured, deactivate when neutral/enemy-owne
 ```text
 Phase 1: Foundation ✅ ─── project structure → networking → ship movement
 Phase 2: World ✅ ─────── asteroids ✅ → tridrants ✅ → minimap ✅ → HUD ✅ → fuel system ✅
-Phase 3: Combat ❌ ─────── weapons framework → 5 ship classes → selection
+Phase 3: Combat 🔧 ─────── weapons framework ✅ → 5 ship classes → selection
 Phase 4: Objectives ❌ ─── capture zones → defenses → benefits → win condition
 Phase 5: Game Feel 🔧 ─── thruster particles ✅ → fog/VFX/audio ❌ → collision polish ❌
 Phase 6: Polish ❌ ─────── lobby → balance → infrastructure → anti-cheat
@@ -283,13 +284,16 @@ Phase 6: Polish ❌ ─────── lobby → balance → infrastructure �
 - Minimap with boundary, objective zones, ship dots, and viewport rectangle
 - HUD: health bar, fuel gauge (consumption + regen), speed + coordinates
 - WASM/browser support via Trunk + WebTransport (Chrome/Edge)
+- Autocannon projectiles: server-authoritative spawn, shared cooldown/lifetime, HDR rendering
+- Hit detection: circle-circle overlap (server-only), damage application, HP clamping
+- Ship destruction at 0 HP with 3s respawn timer (server-side queue)
 
-### Next up (Phase 3: Combat)
+### Next up (Phase 3: Combat, continued)
 
-1. Projectile entity framework (spawn, replicate, lifetime, collision)
-2. Hit detection + damage application + ship destruction
-3. Interceptor class: autocannon + mines
+1. ~~Projectile entity framework~~ ✅
+2. ~~Hit detection + damage application + ship destruction~~ ✅
+3. ~~Interceptor class: autocannon + mines~~ ✅
 4. Ship class selection UI
-5. Remaining 4 ship classes
+5. Remaining 4 ship classes (Gunship, Torpedo Boat, Sniper, Drone Commander)
 
 Each phase builds on the previous. Phases are playable milestones — after each one, the game is testable and demonstrable at that level of completeness.

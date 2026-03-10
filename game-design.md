@@ -14,14 +14,16 @@
 ## Win Condition
 
 - Team with 0 captured objectives loses. Round restarts, teams reshuffle.
-- Respawn at a random captured objective.
+- Respawn at a random captured objective with brief spawn protection (2–3s invulnerability).
+- Last-stand bonus: a team's sole remaining objective has strengthened defenses (more Factory drones, faster Railgun fire rate, stronger Powerplant shield).
 
 ## Capture Mechanics
 
 - Proximity-based: presence in zone captures/decaps
-- Multiple ships accelerate capture
-- Progress only changes with ships present — no natural decay to neutral
-- Stays captured until enemy actively decaps
+- Capture rate is constant regardless of ship count (1 ship caps as fast as 6)
+- Unattended objectives passively decap toward neutral over time (slow decay when no allied ships are present)
+- Stays captured until enemy actively decaps or passive decay returns it to neutral
+- Capturing an objective breaks Sniper cloak
 
 ## Objectives
 
@@ -155,7 +157,7 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 
 **Mines (Interceptor / Sniper)**
 - **Deploy:** Brief white flash on drop, mine inherits ship velocity then decelerates to stationary.
-- **Idle:** Small dark sphere (~8px) with a slow-pulsing red core glow. Pulse rate increases when an enemy enters proximity range (serves as subtle warning for attentive players).
+- **Idle:** Small black octagon (~8px) with a faint white shadow/outline glow and a slow-pulsing red core. Pulse rate increases when an enemy enters proximity range (serves as subtle warning for attentive players).
 - **Detonation:** Sharp red-white explosion, expanding ring, fast-fading. Similar intensity to a torpedo hit but more concentrated.
 
 ### Abilities
@@ -204,7 +206,7 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 - **Powerplant is the key objective** — its shield protects allied ships inside, making it the hardest to crack but the most valuable to hold. A team with Powerplant + one other point has a strong defensive position.
 - **Drone Commander vs Factory** is a natural matchup — anti-drone pulse clears Factory drones, but then the Commander has no drones either. Bring allies to finish the capture.
 - **Sniper at Railgun** is thematic and tactical — cloak lets you approach without the railgun tracking you (shimmer is inaccurate), then decloak and fire.
-- **Torpedo Boat vs Powerplant** is hard — torpedoes detonate on shield. Forces Torpedo Boats to breach first, where they're weakest (laser only). Team composition matters.
+- **Torpedo Boat as shield-breaker** — torpedoes detonate on the Powerplant shield and greatly weaken it on impact. Torpedo Boats are the counter-pick for cracking shielded objectives, opening windows for teammates to push in.
 - **Fuel starvation** when losing all objectives means the losing team can't afterburn, making the final push desperate and scrappy.
 
 ## Minimap
@@ -214,10 +216,12 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 
 ## Open Questions (defer to prototyping)
 
-- Exact capture zone radius and capture speed curves
+- Exact capture zone radius and capture speed
+- Passive decap rate (how fast unattended objectives drift to neutral)
+- Last-stand defense bonus values (how much stronger the final objective gets)
 - Drone AI behavior (formation, scatter, focus-fire)
 - Railgun objective cooldown between shots
-- Whether Powerplant shield has HP or is permanent while captured
-- Spawn invulnerability duration (if any)
-- Map size and asteroid density
+- Powerplant shield HP pool and torpedo damage to shield
+- Spawn protection duration (2–3s range)
 - Exact balance numbers for all weapons and ships
+- Mine stacking: with 30s lifetime and multiple mine-layers (Interceptor + Sniper), dense permanent minefields around objectives may be oppressive — observe during playtesting, consider team mine cap or lifetime reduction if needed

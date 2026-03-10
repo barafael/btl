@@ -24,7 +24,7 @@ impl Plugin for MinimapPlugin {
 }
 
 #[derive(Component)]
-struct MinimapRoot;
+pub(crate) struct MinimapRoot;
 
 #[derive(Component)]
 struct MinimapDot {

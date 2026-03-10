@@ -2,7 +2,7 @@ use avian2d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::prelude::*;
 
 use crate::client::LocalShip;
-use btl_protocol::ShipInput;
+use btl_protocol::{Fuel, ShipInput};
 use btl_shared::SHIP_RADIUS;
 use lightyear::prelude::input::native::{ActionState, InputMarker};
 
@@ -35,6 +35,18 @@ const HALO_SIZE_MULT: f32 = 3.0;
 const HALO_ALPHA_MULT: f32 = 0.25;
 const HALO_CHANCE: f32 = 0.3;
 
+// Afterburner boost multipliers
+const AB_SPAWN_RATE_MULT: f32 = 2.5;
+const AB_LIFETIME_MULT: f32 = 1.8;
+const AB_SPEED_MULT: f32 = 1.3;
+const AB_SIZE_MULT: f32 = 1.6;
+// Afterburner color: intense blue-white HDR
+const COLOR_AB_HOT: Vec3 = Vec3::new(5.0, 5.0, 8.0);  // blue-white blaze
+const COLOR_AB_MID: Vec3 = Vec3::new(3.0, 2.0, 4.0);  // violet-blue
+const COLOR_AB_COOL: Vec3 = Vec3::new(1.5, 0.5, 0.8);  // fading purple
+// Fuel sputter threshold (fraction)
+const SPUTTER_THRESHOLD: f32 = 0.2;
+
 #[derive(Component)]
 struct Particle {
     velocity: Vec2,
@@ -43,6 +55,7 @@ struct Particle {
     start_alpha: f32,
     is_halo: bool,
     start_size: f32,
+    afterburner: bool,
 }
 
 /// Simple fast hash for pseudo-random particle variation
@@ -82,17 +95,22 @@ impl Plugin for ParticlePlugin {
 fn spawn_thruster_particles(
     mut commands: Commands,
     ship_query: Query<
-        (&Transform, &ActionState<ShipInput>, &LinearVelocity, &AngularVelocity),
+        (&Transform, &ActionState<ShipInput>, &LinearVelocity, &AngularVelocity, &Fuel),
         (With<LocalShip>, With<InputMarker<ShipInput>>),
     >,
     time: Res<Time>,
     mut rng: ResMut<ParticleRng>,
 ) {
-    let Ok((transform, action_state, lin_vel, ang_vel)) = ship_query.single() else {
+    let Ok((transform, action_state, lin_vel, ang_vel, fuel)) = ship_query.single() else {
         return;
     };
     let input = &action_state.0;
     let dt = time.delta_secs();
+
+    let afterburner_active = input.afterburner && fuel.current > 0.0;
+    // Fuel sputter: when fuel is low, randomly skip particle spawns
+    let fuel_frac = fuel.fraction();
+    let sputtering = afterburner_active && fuel_frac < SPUTTER_THRESHOLD;
 
     let forward = transform.up().truncate();
     let right = transform.right().truncate();
@@ -101,7 +119,11 @@ fn spawn_thruster_particles(
     // Ship velocity for interpolating spawn positions across the frame
     let ship_vel = lin_vel.0;
 
-    let mut spawn_cone = |pos: Vec2, dir: Vec2, alpha: f32, spread: f32, count: usize| {
+    let mut spawn_cone = |pos: Vec2, dir: Vec2, alpha: f32, spread: f32, count: usize, is_ab: bool| {
+        // Sputtering: skip entire bursts randomly when fuel is critically low
+        if sputtering && rng.next_f32() < 0.5 {
+            return;
+        }
         for i in 0..count {
             // Distribute spawn times evenly across the frame to avoid clumping
             let frac = if count > 1 { i as f32 / count as f32 } else { rng.next_f32() };
@@ -124,7 +146,8 @@ fn spawn_thruster_particles(
             let is_halo = !is_ember && rng.next_f32() < HALO_CHANCE;
 
             let base_speed = PARTICLE_SPEED_MIN + rng.next_f32() * (PARTICLE_SPEED_MAX - PARTICLE_SPEED_MIN);
-            let speed = if is_ember { base_speed * EMBER_SPEED_MULT } else { base_speed };
+            let ab_speed = if is_ab { AB_SPEED_MULT } else { 1.0 };
+            let speed = if is_ember { base_speed * EMBER_SPEED_MULT } else { base_speed * ab_speed };
 
             // Slight positional jitter at nozzle
             let jitter = rng.next_signed() * if is_halo { 3.0 } else { 1.5 };
@@ -134,26 +157,29 @@ fn spawn_thruster_particles(
             // Velocity: particle direction + inherited ship velocity
             let vel = varied_dir * speed + ship_vel * VELOCITY_INHERIT;
 
+            let ab_life = if is_ab { AB_LIFETIME_MULT } else { 1.0 };
             let lifetime = if is_ember {
-                PARTICLE_LIFETIME * EMBER_LIFETIME_MULT * (0.8 + rng.next_f32() * 0.4)
+                PARTICLE_LIFETIME * EMBER_LIFETIME_MULT * ab_life * (0.8 + rng.next_f32() * 0.4)
             } else {
-                PARTICLE_LIFETIME * (0.8 + rng.next_f32() * 0.4)
+                PARTICLE_LIFETIME * ab_life * (0.8 + rng.next_f32() * 0.4)
             };
 
             let particle_alpha = if is_halo { alpha * HALO_ALPHA_MULT } else { alpha };
 
             // Size variation: randomize start size
+            let ab_size = if is_ab { AB_SIZE_MULT } else { 1.0 };
             let size = if is_ember {
-                EMBER_SIZE
+                EMBER_SIZE * ab_size
             } else if is_halo {
-                PARTICLE_SIZE_START * HALO_SIZE_MULT * (0.8 + rng.next_f32() * 0.4)
+                PARTICLE_SIZE_START * HALO_SIZE_MULT * ab_size * (0.8 + rng.next_f32() * 0.4)
             } else {
-                PARTICLE_SIZE_START * (0.6 + rng.next_f32() * 0.8)
+                PARTICLE_SIZE_START * ab_size * (0.6 + rng.next_f32() * 0.8)
             };
 
-            // Initial color: hot HDR white-blue at birth
+            // Initial color: hot HDR white-blue at birth (afterburner is more intense blue)
+            let hot = if is_ab { COLOR_AB_HOT } else { COLOR_HOT };
             let color = Color::LinearRgba(LinearRgba::new(
-                COLOR_HOT.x, COLOR_HOT.y, COLOR_HOT.z, particle_alpha,
+                hot.x, hot.y, hot.z, particle_alpha,
             ));
 
             commands.spawn((
@@ -164,6 +190,7 @@ fn spawn_thruster_particles(
                     start_alpha: particle_alpha,
                     is_halo,
                     start_size: size,
+                    afterburner: is_ab,
                 },
                 Sprite {
                     color,
@@ -179,101 +206,113 @@ fn spawn_thruster_particles(
         }
     };
 
-    let count = (PARTICLE_SPAWN_RATE * dt).max(1.0) as usize;
+    let base_rate = if afterburner_active { PARTICLE_SPAWN_RATE * AB_SPAWN_RATE_MULT } else { PARTICLE_SPAWN_RATE };
+    let count = (base_rate * dt).max(1.0) as usize;
     let speed = lin_vel.0.length();
-    let max_speed = if input.afterburner { btl_shared::SHIP_MAX_SPEED * 1.5 } else { btl_shared::SHIP_MAX_SPEED };
+    let max_speed = if afterburner_active { btl_shared::SHIP_MAX_SPEED * 1.5 } else { btl_shared::SHIP_MAX_SPEED };
     let at_max_speed = speed >= max_speed - 0.5;
 
-    // Main thruster (rear) — only fire if thrust would still accelerate
-    if input.thrust_forward && !(at_max_speed && lin_vel.0.dot(forward) > 0.0) {
-        let alpha = if input.afterburner { 0.9 } else { 0.7 };
+    // Main thruster (rear) — scale particles by throttle
+    let fwd_mag = input.thrust_forward.abs();
+    if fwd_mag > 0.05 && !(at_max_speed && lin_vel.0.dot(forward) > 0.0) {
+        let scaled = (count as f32 * fwd_mag).max(1.0) as usize;
+        let alpha = if afterburner_active { 0.95 } else { 0.7 * fwd_mag.max(0.3) };
         let base = ship_pos - forward * SHIP_RADIUS;
-        spawn_cone(base, -forward, alpha, CONE_HALF_ANGLE, count);
+        spawn_cone(base, -forward, alpha, CONE_HALF_ANGLE, scaled, afterburner_active);
     }
 
-    // Reverse thruster (front) — only fire if thrust would still decelerate
-    if input.thrust_backward && !(at_max_speed && lin_vel.0.dot(-forward) > 0.0) {
+    // Reverse thruster (front)
+    let bwd_mag = input.thrust_backward.abs();
+    if bwd_mag > 0.05 && !(at_max_speed && lin_vel.0.dot(-forward) > 0.0) {
+        let scaled = (count as f32 * 0.5 * bwd_mag).max(1.0) as usize;
         let base = ship_pos + forward * SHIP_RADIUS * 1.2;
-        spawn_cone(base, forward, 0.5, CONE_HALF_ANGLE * 1.5, (count / 2).max(1));
+        spawn_cone(base, forward, 0.5 * bwd_mag.max(0.3), CONE_HALF_ANGLE * 1.5, scaled, false);
     }
 
     let rcs_count = (count / 5).max(1);
     let ang = ang_vel.0 as f32;
     let at_max_spin = ang.abs() >= btl_shared::SHIP_MAX_ANGULAR_SPEED - 0.1;
 
-    // Strafe thrusters (side jets firing in unison)
-    let strafe_count = (count / 3).max(1);
-    if input.strafe_left && !(at_max_speed && lin_vel.0.dot(-right) > 0.0) {
-        let fr = ship_pos + forward * SHIP_RADIUS * 0.5 + right * SHIP_RADIUS * 0.6;
-        let br = ship_pos - forward * SHIP_RADIUS * 0.5 + right * SHIP_RADIUS * 0.6;
-        spawn_cone(fr, right, 0.5, CONE_HALF_ANGLE * 1.2, strafe_count);
-        spawn_cone(br, right, 0.5, CONE_HALF_ANGLE * 1.2, strafe_count);
-    }
-    if input.strafe_right && !(at_max_speed && lin_vel.0.dot(right) > 0.0) {
-        let fl = ship_pos + forward * SHIP_RADIUS * 0.5 - right * SHIP_RADIUS * 0.6;
-        let bl = ship_pos - forward * SHIP_RADIUS * 0.5 - right * SHIP_RADIUS * 0.6;
-        spawn_cone(fl, -right, 0.5, CONE_HALF_ANGLE * 1.2, strafe_count);
-        spawn_cone(bl, -right, 0.5, CONE_HALF_ANGLE * 1.2, strafe_count);
-    }
-
-    // Rotation thrusters (side jets) — only fire while still accelerating
-    if input.rotate_left && !(at_max_spin && ang > 0.0) {
-        let rf = ship_pos + forward * SHIP_RADIUS * 0.8 + right * SHIP_RADIUS * 0.6;
-        let lr = ship_pos - forward * SHIP_RADIUS * 0.8 - right * SHIP_RADIUS * 0.6;
-        spawn_cone(rf, -right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
-        spawn_cone(lr, right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
-    }
-    if input.rotate_right && !(at_max_spin && ang < 0.0) {
-        let lf = ship_pos + forward * SHIP_RADIUS * 0.8 - right * SHIP_RADIUS * 0.6;
-        let rr = ship_pos - forward * SHIP_RADIUS * 0.8 + right * SHIP_RADIUS * 0.6;
-        spawn_cone(lf, right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
-        spawn_cone(rr, -right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
+    // Strafe thrusters — scale by magnitude, deadzone at 0.1
+    let strafe_mag = input.strafe.abs();
+    if strafe_mag > 0.1 {
+        let scaled = (count as f32 / 3.0 * strafe_mag).max(1.0) as usize;
+        let alpha = 0.5 * strafe_mag.max(0.3);
+        if input.strafe > 0.0 && !(at_max_speed && lin_vel.0.dot(-right) > 0.0) {
+            let fr = ship_pos + forward * SHIP_RADIUS * 0.5 + right * SHIP_RADIUS * 0.6;
+            let br = ship_pos - forward * SHIP_RADIUS * 0.5 + right * SHIP_RADIUS * 0.6;
+            spawn_cone(fr, right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+            spawn_cone(br, right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+        }
+        if input.strafe < 0.0 && !(at_max_speed && lin_vel.0.dot(right) > 0.0) {
+            let fl = ship_pos + forward * SHIP_RADIUS * 0.5 - right * SHIP_RADIUS * 0.6;
+            let bl = ship_pos - forward * SHIP_RADIUS * 0.5 - right * SHIP_RADIUS * 0.6;
+            spawn_cone(fl, -right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+            spawn_cone(bl, -right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+        }
     }
 
-    // Stabilize: fire fixed thrusters that oppose current velocity components
-    if input.stabilize {
+    // Rotation thrusters — scale by magnitude, deadzone at 0.1
+    let rot_mag = input.rotate.abs();
+    if rot_mag > 0.1 {
+        let scaled = (rcs_count as f32 * rot_mag).max(1.0) as usize;
+        let alpha = 0.35 * rot_mag.max(0.3);
+        if input.rotate > 0.0 && !(at_max_spin && ang > 0.0) {
+            let rf = ship_pos + forward * SHIP_RADIUS * 0.8 + right * SHIP_RADIUS * 0.6;
+            let lr = ship_pos - forward * SHIP_RADIUS * 0.8 - right * SHIP_RADIUS * 0.6;
+            spawn_cone(rf, -right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+            spawn_cone(lr, right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+        }
+        if input.rotate < 0.0 && !(at_max_spin && ang < 0.0) {
+            let lf = ship_pos + forward * SHIP_RADIUS * 0.8 - right * SHIP_RADIUS * 0.6;
+            let rr = ship_pos - forward * SHIP_RADIUS * 0.8 + right * SHIP_RADIUS * 0.6;
+            spawn_cone(lf, right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+            spawn_cone(rr, -right, alpha, CONE_HALF_ANGLE * 1.2, scaled, false);
+        }
+    }
+
+    // Stabilize: scale by magnitude
+    let stab_mag = input.stabilize;
+    if stab_mag > 0.05 {
+        let stab_count = (rcs_count as f32 * stab_mag).max(1.0) as usize;
+        let alpha = 0.35 * stab_mag.max(0.3);
         let vel = lin_vel.0;
         let fwd_component = vel.dot(forward);
         let right_component = vel.dot(right);
 
-        // Moving forward → fire front (reverse) thruster
         if fwd_component > 0.5 {
             let base = ship_pos + forward * SHIP_RADIUS * 1.2;
-            spawn_cone(base, forward, 0.35, CONE_HALF_ANGLE * 1.5, rcs_count);
+            spawn_cone(base, forward, alpha, CONE_HALF_ANGLE * 1.5, stab_count, false);
         }
-        // Moving backward → fire rear (main) thruster
         if fwd_component < -0.5 {
             let base = ship_pos - forward * SHIP_RADIUS;
-            spawn_cone(base, -forward, 0.35, CONE_HALF_ANGLE * 1.5, rcs_count);
+            spawn_cone(base, -forward, alpha, CONE_HALF_ANGLE * 1.5, stab_count, false);
         }
-        // Moving right → fire right-side jets (push left)
         if right_component > 0.5 {
             let fr = ship_pos + forward * SHIP_RADIUS * 0.5 + right * SHIP_RADIUS * 0.6;
             let br = ship_pos - forward * SHIP_RADIUS * 0.5 + right * SHIP_RADIUS * 0.6;
-            spawn_cone(fr, right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
-            spawn_cone(br, right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
+            spawn_cone(fr, right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
+            spawn_cone(br, right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
         }
-        // Moving left → fire left-side jets (push right)
         if right_component < -0.5 {
             let fl = ship_pos + forward * SHIP_RADIUS * 0.5 - right * SHIP_RADIUS * 0.6;
             let bl = ship_pos - forward * SHIP_RADIUS * 0.5 - right * SHIP_RADIUS * 0.6;
-            spawn_cone(fl, -right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
-            spawn_cone(bl, -right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
+            spawn_cone(fl, -right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
+            spawn_cone(bl, -right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
         }
 
-        // Angular stabilize
         let ang = ang_vel.0 as f32;
         if ang.abs() > 0.05 {
             if ang > 0.0 {
                 let lf = ship_pos + forward * SHIP_RADIUS * 0.8 - right * SHIP_RADIUS * 0.6;
                 let rr = ship_pos - forward * SHIP_RADIUS * 0.8 + right * SHIP_RADIUS * 0.6;
-                spawn_cone(lf, right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
-                spawn_cone(rr, -right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
+                spawn_cone(lf, right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
+                spawn_cone(rr, -right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
             } else {
                 let rf = ship_pos + forward * SHIP_RADIUS * 0.8 + right * SHIP_RADIUS * 0.6;
                 let lr = ship_pos - forward * SHIP_RADIUS * 0.8 - right * SHIP_RADIUS * 0.6;
-                spawn_cone(rf, -right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
-                spawn_cone(lr, right, 0.35, CONE_HALF_ANGLE * 1.2, rcs_count);
+                spawn_cone(rf, -right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
+                spawn_cone(lr, right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
             }
         }
     }
@@ -298,15 +337,18 @@ fn update_particles(
         // t goes from 1 (birth) to 0 (death)
         let t = (particle.lifetime / particle.max_lifetime).clamp(0.0, 1.0);
 
-        // Color gradient: hot → mid → cool
-        let color_rgb = if t > 0.5 {
-            // Hot to mid (first half of life)
-            let blend = (1.0 - t) * 2.0; // 0 at birth, 1 at midlife
-            COLOR_HOT.lerp(COLOR_MID, blend)
+        // Color gradient: hot → mid → cool (afterburner uses blue-shifted palette)
+        let (c_hot, c_mid, c_cool) = if particle.afterburner {
+            (COLOR_AB_HOT, COLOR_AB_MID, COLOR_AB_COOL)
         } else {
-            // Mid to cool (second half of life)
-            let blend = (0.5 - t) * 2.0; // 0 at midlife, 1 at death
-            COLOR_MID.lerp(COLOR_COOL, blend)
+            (COLOR_HOT, COLOR_MID, COLOR_COOL)
+        };
+        let color_rgb = if t > 0.5 {
+            let blend = (1.0 - t) * 2.0;
+            c_hot.lerp(c_mid, blend)
+        } else {
+            let blend = (0.5 - t) * 2.0;
+            c_mid.lerp(c_cool, blend)
         };
 
         // Alpha: quadratic drop-off for focused beam look

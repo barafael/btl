@@ -1,5 +1,7 @@
 mod client;
+mod effects;
 mod minimap;
+mod nebula;
 mod particles;
 mod starfield;
 
@@ -102,7 +104,9 @@ fn main() {
         })
         .add_plugins(starfield::StarfieldPlugin)
         .add_plugins(particles::ParticlePlugin)
+        .add_plugins(effects::EffectsPlugin)
         .add_plugins(minimap::MinimapPlugin)
+        .add_plugins(nebula::NebulaPlugin)
         .add_systems(Startup, (setup_camera, spawn_boundary_ring, spawn_tridrant_markers, spawn_objective_zones))
         .run();
 }

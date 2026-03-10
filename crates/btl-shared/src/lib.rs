@@ -1,3 +1,5 @@
+pub mod nebula;
+
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use lightyear::avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
@@ -7,7 +9,7 @@ pub use avian2d::prelude::{Position, Rotation};
 pub use lightyear::frame_interpolation::prelude::{FrameInterpolate, FrameInterpolationPlugin};
 
 use btl_protocol::*;
-pub use btl_protocol::{Asteroid, Fuel, Health};
+pub use btl_protocol::{Ammo, Asteroid, FireCooldown, Fuel, Health, Mine, MineCooldown, NebulaSeed, Projectile};
 
 // --- Ship constants ---
 
@@ -26,6 +28,48 @@ pub const SHIP_MAX_FUEL: f32 = 100.0;
 pub const FUEL_BURN_RATE: f32 = 20.0;
 /// Fuel regenerated per second when afterburner is off
 pub const FUEL_REGEN_RATE: f32 = 8.0;
+/// Max autocannon ammo
+pub const SHIP_MAX_AMMO: f32 = 60.0;
+/// Ammo consumed per autocannon shot
+pub const AMMO_COST: f32 = 1.0;
+/// Ammo regenerated per second (passive)
+pub const AMMO_REGEN_RATE: f32 = 2.0;
+
+// --- Autocannon constants (Interceptor primary weapon) ---
+
+/// Rounds per second
+pub const AUTOCANNON_FIRE_RATE: f32 = 8.0;
+/// Cooldown between shots
+pub const AUTOCANNON_COOLDOWN: f32 = 1.0 / AUTOCANNON_FIRE_RATE;
+/// Projectile speed (added to ship velocity)
+pub const AUTOCANNON_SPEED: f32 = 800.0;
+/// Damage per hit
+pub const AUTOCANNON_DAMAGE: f32 = 8.0;
+/// Projectile lifetime in seconds
+pub const AUTOCANNON_LIFETIME: f32 = 1.5;
+/// Projectile collider radius
+pub const PROJECTILE_RADIUS: f32 = 3.0;
+/// Muzzle offset from ship center (spawn at ship edge)
+pub const MUZZLE_OFFSET: f32 = SHIP_RADIUS + PROJECTILE_RADIUS + 2.0;
+
+// --- Mine constants (Interceptor secondary weapon) ---
+
+/// Damage dealt by mine detonation
+pub const MINE_DAMAGE: f32 = 40.0;
+/// Mine lifetime in seconds
+pub const MINE_LIFETIME: f32 = 30.0;
+/// Time before mine arms after dropping (seconds)
+pub const MINE_ARM_TIME: f32 = 1.0;
+/// Proximity trigger radius (distance from mine center to ship center)
+pub const MINE_TRIGGER_RADIUS: f32 = 60.0;
+/// Visual radius of the mine entity
+pub const MINE_RADIUS: f32 = 8.0;
+/// Cooldown between mine drops
+pub const MINE_COOLDOWN: f32 = 2.0;
+/// Max active mines per player
+pub const MINE_MAX_ACTIVE: usize = 5;
+/// Backward velocity offset when dropping (subtracted from ship velocity)
+pub const MINE_DROP_SPEED: f32 = 30.0;
 
 // --- Map constants ---
 
@@ -164,6 +208,13 @@ impl Plugin for SharedPlugin {
         // Health and fuel need prediction for responsive HUD
         app.register_component::<Health>().add_prediction();
         app.register_component::<Fuel>().add_prediction();
+        app.register_component::<Ammo>().add_prediction();
+        app.register_component::<FireCooldown>().add_prediction();
+        app.register_component::<MineCooldown>().add_prediction();
+        app.register_component::<Projectile>();
+        app.register_component::<Mine>();
+        // Nebula seed: static, no prediction needed
+        app.register_component::<NebulaSeed>();
 
         // Register Avian physics components for prediction/interpolation/rollback
         // (requires lightyear_avian2d for Diffable trait impls)
@@ -216,7 +267,21 @@ impl Plugin for SharedPlugin {
         app.insert_resource(Gravity(Vec2::ZERO));
 
         // Shared systems run on both client (prediction) and server (authority)
-        app.add_systems(FixedUpdate, (apply_ship_input, update_fuel, enforce_map_boundary));
+        app.add_systems(FixedUpdate, (
+            apply_ship_input,
+            update_fuel,
+            update_ammo,
+            tick_fire_cooldown,
+            tick_mine_cooldown,
+            update_projectile_lifetime,
+            check_projectile_asteroid_collisions,
+            update_mine_lifetime,
+            enforce_map_boundary,
+        ));
+
+        // Sync Position→Transform for non-physics entities (projectiles, mines)
+        // Avian only syncs entities with RigidBody; these don't have one.
+        app.add_systems(PostUpdate, sync_position_to_transform);
     }
 }
 
@@ -241,6 +306,9 @@ pub struct ShipBundle {
     pub angular_damping: AngularDamping,
     pub health: Health,
     pub fuel: Fuel,
+    pub ammo: Ammo,
+    pub fire_cooldown: FireCooldown,
+    pub mine_cooldown: MineCooldown,
 }
 
 impl ShipBundle {
@@ -263,6 +331,9 @@ impl ShipBundle {
             angular_damping: AngularDamping(0.0),
             health: Health::new(SHIP_MAX_HEALTH),
             fuel: Fuel::new(SHIP_MAX_FUEL),
+            ammo: Ammo::new(SHIP_MAX_AMMO),
+            fire_cooldown: FireCooldown::default(),
+            mine_cooldown: MineCooldown::default(),
         }
     }
 }
@@ -282,50 +353,45 @@ fn apply_ship_input(
         let input = &input.0;
         let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
         let forward = *rotation * Vec2::Y;
+        let right = *rotation * Vec2::X;
+
+        // Clamp continuous inputs to valid ranges
+        let fwd = input.thrust_forward.clamp(0.0, 1.0);
+        let bwd = input.thrust_backward.clamp(0.0, 1.0);
+        let rot = input.rotate.clamp(-1.0, 1.0);
+        let strf = input.strafe.clamp(-1.0, 1.0);
+        let stab = input.stabilize.clamp(0.0, 1.0);
 
         // Afterburner only works with fuel
         let afterburner_active = input.afterburner && fuel.current > 0.0;
 
-        // Thrust
+        // Thrust (continuous throttle)
         let thrust = if afterburner_active {
             SHIP_AFTERBURNER_THRUST
         } else {
             SHIP_THRUST
         };
 
-        if input.thrust_forward {
-            lin_vel.0 += forward * thrust * dt;
-        }
-        if input.thrust_backward {
-            lin_vel.0 -= forward * thrust * 0.5 * dt;
-        }
+        lin_vel.0 += forward * thrust * fwd * dt;
+        lin_vel.0 -= forward * thrust * 0.5 * bwd * dt;
 
-        // Strafe (lateral thrusters — weaker than main engine)
-        let right = *rotation * Vec2::X;
-        if input.strafe_left {
-            lin_vel.0 -= right * SHIP_STRAFE_THRUST * dt;
-        }
-        if input.strafe_right {
-            lin_vel.0 += right * SHIP_STRAFE_THRUST * dt;
-        }
+        // Strafe (continuous, positive = left, negative = right)
+        lin_vel.0 -= right * SHIP_STRAFE_THRUST * strf * dt;
 
-        // Rotation: input sets desired turn rate, thrusters steer toward it
-        let desired_ang = if input.rotate_left && !input.rotate_right {
-            SHIP_MAX_ANGULAR_SPEED
-        } else if input.rotate_right && !input.rotate_left {
-            -SHIP_MAX_ANGULAR_SPEED
-        } else if input.stabilize {
-            // Stabilize targets zero rotation
+        // Rotation: continuous input sets desired turn rate as fraction of max
+        let has_rotation_input = rot.abs() > 0.01;
+        let desired_ang = if has_rotation_input {
+            rot * SHIP_MAX_ANGULAR_SPEED
+        } else if stab > 0.01 {
             0.0
         } else {
-            // No input: keep current angular velocity (pure Newtonian)
             ang_vel.0
         };
 
         if desired_ang != ang_vel.0 {
             let ang_diff = desired_ang - ang_vel.0;
-            let max_change = if input.stabilize {
-                SHIP_STABILIZE_ANG_DECEL * dt
+            let max_change = if stab > 0.01 && !has_rotation_input {
+                SHIP_STABILIZE_ANG_DECEL * stab * dt
             } else {
                 SHIP_ANGULAR_DECEL * dt
             };
@@ -336,12 +402,12 @@ fn apply_ship_input(
             }
         }
 
-        // Stabilize: fire retro-thrusters to kill linear velocity
-        if input.stabilize {
+        // Stabilize: retro-thrusters proportional to stabilize input
+        if stab > 0.01 {
             let speed = lin_vel.0.length();
             if speed > 0.1 {
                 let dir = lin_vel.0 / speed;
-                let decel = (SHIP_STABILIZE_DECEL * dt).min(speed);
+                let decel = (SHIP_STABILIZE_DECEL * stab * dt).min(speed);
                 lin_vel.0 -= dir * decel;
             } else {
                 lin_vel.0 = Vec2::ZERO;
@@ -357,6 +423,60 @@ fn apply_ship_input(
     }
 }
 
+/// Tick down fire cooldowns.
+fn tick_fire_cooldown(mut query: Query<&mut FireCooldown>) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for mut cd in query.iter_mut() {
+        if cd.remaining > 0.0 {
+            cd.remaining = (cd.remaining - dt).max(0.0);
+        }
+    }
+}
+
+/// Move projectiles and tick down lifetime. Despawn expired projectiles.
+fn update_projectile_lifetime(
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut Projectile, &mut Position, &LinearVelocity)>,
+) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for (entity, mut proj, mut pos, vel) in query.iter_mut() {
+        // Move projectile (no physics engine — simple linear movement)
+        pos.0 += vel.0 * dt;
+
+        proj.lifetime -= dt;
+        if proj.lifetime <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Tick down mine cooldowns.
+fn tick_mine_cooldown(mut query: Query<&mut MineCooldown>) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for mut cd in query.iter_mut() {
+        if cd.remaining > 0.0 {
+            cd.remaining = (cd.remaining - dt).max(0.0);
+        }
+    }
+}
+
+/// Tick mine arm timers and lifetime. Despawn expired mines.
+fn update_mine_lifetime(
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut Mine)>,
+) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for (entity, mut mine) in query.iter_mut() {
+        if mine.arm_timer > 0.0 {
+            mine.arm_timer = (mine.arm_timer - dt).max(0.0);
+        }
+        mine.lifetime -= dt;
+        if mine.lifetime <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 /// Consume fuel while afterburner is active, regenerate when inactive.
 fn update_fuel(
     mut query: Query<(&ActionState<ShipInput>, &mut Fuel)>,
@@ -367,6 +487,35 @@ fn update_fuel(
             fuel.current = (fuel.current - FUEL_BURN_RATE * dt).max(0.0);
         } else if fuel.current < fuel.max {
             fuel.current = (fuel.current + FUEL_REGEN_RATE * dt).min(fuel.max);
+        }
+    }
+}
+
+/// Passive ammo regeneration.
+fn update_ammo(
+    mut query: Query<&mut Ammo>,
+) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for mut ammo in query.iter_mut() {
+        if ammo.current < ammo.max {
+            ammo.current = (ammo.current + AMMO_REGEN_RATE * dt).min(ammo.max);
+        }
+    }
+}
+
+/// Despawn projectiles that hit asteroids.
+fn check_projectile_asteroid_collisions(
+    mut commands: Commands,
+    projectiles: Query<(Entity, &Position), With<Projectile>>,
+    asteroids: Query<(&Position, &Asteroid)>,
+) {
+    for (proj_entity, proj_pos) in projectiles.iter() {
+        for (ast_pos, asteroid) in asteroids.iter() {
+            let hit_dist = PROJECTILE_RADIUS + asteroid.radius;
+            if (proj_pos.0 - ast_pos.0).length_squared() < hit_dist * hit_dist {
+                commands.entity(proj_entity).despawn();
+                break;
+            }
         }
     }
 }
@@ -398,6 +547,80 @@ fn enforce_map_boundary(
                 // Remove outward component and add inward bounce
                 lin_vel.0 -= dir_from_center * outward_component;
                 lin_vel.0 -= dir_from_center * BOUNDARY_REFLECT_SPEED;
+            }
+        }
+    }
+}
+
+/// Check mine proximity and detonate armed mines near enemy ships.
+/// Mines damage all enemy ships within trigger radius on detonation.
+pub fn check_mine_detonations(
+    mut commands: Commands,
+    mines: Query<(Entity, &Mine, &Position)>,
+    mut ships: Query<(Entity, &Position, &Team, &mut Health)>,
+) {
+    let trigger_dist_sq = MINE_TRIGGER_RADIUS * MINE_TRIGGER_RADIUS;
+
+    for (mine_entity, mine, mine_pos) in mines.iter() {
+        // Skip unarmed mines
+        if mine.arm_timer > 0.0 {
+            continue;
+        }
+
+        let mut detonated = false;
+        for (_ship_entity, ship_pos, ship_team, mut health) in ships.iter_mut() {
+            // No friendly fire — skip same team
+            if *ship_team == mine.owner_team {
+                continue;
+            }
+
+            let delta = mine_pos.0 - ship_pos.0;
+            if delta.length_squared() < trigger_dist_sq {
+                health.current = (health.current - mine.damage).max(0.0);
+                detonated = true;
+                break;
+            }
+        }
+
+        if detonated {
+            commands.entity(mine_entity).despawn();
+        }
+    }
+}
+
+/// Sync Position→Transform for entities without RigidBody (projectiles, mines).
+/// Avian's PhysicsTransformPlugin is disabled and LightyearAvian only syncs physics entities.
+fn sync_position_to_transform(
+    mut query: Query<(&Position, &mut Transform), Without<RigidBody>>,
+) {
+    for (pos, mut transform) in query.iter_mut() {
+        transform.translation.x = pos.0.x;
+        transform.translation.y = pos.0.y;
+    }
+}
+
+/// Check projectile-ship overlaps and apply damage. Despawn projectile on hit.
+/// Uses simple circle-circle test (no physics engine for projectiles).
+pub fn check_projectile_hits(
+    mut commands: Commands,
+    projectiles: Query<(Entity, &Projectile, &Position)>,
+    mut ships: Query<(Entity, &Position, &Team, &mut Health)>,
+) {
+    let hit_dist = PROJECTILE_RADIUS + SHIP_RADIUS;
+    let hit_dist_sq = hit_dist * hit_dist;
+
+    for (proj_entity, proj, proj_pos) in projectiles.iter() {
+        for (_ship_entity, ship_pos, ship_team, mut health) in ships.iter_mut() {
+            // No friendly fire — skip same team
+            if *ship_team == proj.owner_team {
+                continue;
+            }
+
+            let delta = proj_pos.0 - ship_pos.0;
+            if delta.length_squared() < hit_dist_sq {
+                health.current = (health.current - proj.damage).max(0.0);
+                commands.entity(proj_entity).despawn();
+                break;
             }
         }
     }

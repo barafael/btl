@@ -66,18 +66,90 @@ impl Fuel {
     }
 }
 
+/// Autocannon ammunition.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Ammo {
+    pub current: f32,
+    pub max: f32,
+}
+
+impl Ammo {
+    pub fn new(max: f32) -> Self {
+        Self { current: max, max }
+    }
+
+    pub fn fraction(&self) -> f32 {
+        if self.max > 0.0 { self.current / self.max } else { 0.0 }
+    }
+}
+
+/// Projectile marker. Carries damage, owner, and remaining lifetime.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Projectile {
+    pub damage: f32,
+    pub owner: PeerId,
+    pub owner_team: Team,
+    pub lifetime: f32,
+}
+
+/// Proximity mine. Detonates when an enemy ship enters its trigger radius.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Mine {
+    pub damage: f32,
+    pub owner: PeerId,
+    pub owner_team: Team,
+    pub lifetime: f32,
+    pub arm_timer: f32,
+}
+
+/// Tracks when a ship can next fire.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FireCooldown {
+    pub remaining: f32,
+}
+
+/// Tracks when a ship can next drop a mine.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MineCooldown {
+    pub remaining: f32,
+}
+
+impl Default for FireCooldown {
+    fn default() -> Self {
+        Self { remaining: 0.0 }
+    }
+}
+
+impl Default for MineCooldown {
+    fn default() -> Self {
+        Self { remaining: 0.0 }
+    }
+}
+
+/// Seed for procedural nebula background generation.
+/// Server picks a seed; clients generate the texture locally.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NebulaSeed(pub u64);
+
 // --- Inputs ---
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Reflect)]
 pub struct ShipInput {
-    pub thrust_forward: bool,
-    pub thrust_backward: bool,
-    pub rotate_left: bool,
-    pub rotate_right: bool,
-    pub strafe_left: bool,
-    pub strafe_right: bool,
+    /// Forward thrust throttle: 0.0 (off) to 1.0 (full).
+    pub thrust_forward: f32,
+    /// Backward thrust throttle: 0.0 (off) to 1.0 (full, applied at 50% power).
+    pub thrust_backward: f32,
+    /// Rotation input: -1.0 (full right) to 1.0 (full left). 0.0 = no rotation command.
+    pub rotate: f32,
+    /// Strafe input: -1.0 (full right) to 1.0 (full left).
+    pub strafe: f32,
     pub afterburner: bool,
-    pub stabilize: bool,
+    /// Stabilize throttle: 0.0 (off) to 1.0 (full retro-braking).
+    pub stabilize: f32,
+    pub fire: bool,
+    pub drop_mine: bool,
+    /// Aim direction in radians (angle from ship to cursor in world space).
+    pub aim_angle: f32,
 }
 
 impl MapEntities for ShipInput {
@@ -102,5 +174,11 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<Asteroid>();
         app.register_component::<Health>();
         app.register_component::<Fuel>();
+        app.register_component::<Ammo>();
+        app.register_component::<Projectile>();
+        app.register_component::<Mine>();
+        app.register_component::<FireCooldown>();
+        app.register_component::<MineCooldown>();
+        app.register_component::<NebulaSeed>();
     }
 }
