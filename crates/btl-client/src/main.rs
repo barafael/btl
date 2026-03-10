@@ -139,7 +139,7 @@ fn setup_camera(mut commands: Commands) {
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
-            scale: 2.0,
+            scale: 2.4,
             ..OrthographicProjection::default_2d()
         }),
         Bloom {
@@ -182,6 +182,10 @@ fn spawn_tridrant_markers(mut commands: Commands) {
     }
 }
 
+/// Marker for zone circle sprites, storing which zone (0, 1, 2) they belong to.
+#[derive(Component)]
+pub struct ZoneMarker(pub usize);
+
 /// Draw circular zone indicators at each objective position.
 fn spawn_objective_zones(mut commands: Commands) {
     let zones = objective_zone_positions();
@@ -189,13 +193,14 @@ fn spawn_objective_zones(mut commands: Commands) {
     let marker_size = 3.0;
     let color = Color::srgba(0.4, 0.4, 0.2, 0.5);
 
-    for center in zones {
+    for (zone_idx, center) in zones.iter().enumerate() {
         for i in 0..marker_count {
             let angle = (i as f32 / marker_count as f32) * std::f32::consts::TAU;
             let x = center.x + OBJECTIVE_ZONE_RADIUS * angle.cos();
             let y = center.y + OBJECTIVE_ZONE_RADIUS * angle.sin();
 
             commands.spawn((
+                ZoneMarker(zone_idx),
                 Sprite {
                     color,
                     custom_size: Some(Vec2::splat(marker_size)),

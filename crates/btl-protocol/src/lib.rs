@@ -222,6 +222,15 @@ pub struct MineCooldown(pub Cooldown);
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct NebulaSeed(pub u64);
 
+/// King-of-the-hill team scores. Replicated to all clients.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct TeamScores {
+    pub red: f32,
+    pub blue: f32,
+    /// Per-zone controller: 0=contested/empty, 1=Red, 2=Blue
+    pub zone_control: [u8; 3],
+}
+
 // --- Inputs ---
 
 #[derive(Serialize, Deserialize, Debug, Default, PartialEq, Clone, Reflect)]
@@ -280,5 +289,6 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<Cloak>();
         app.register_component::<RailgunCharge>();
         app.register_component::<Drone>();
+        app.register_component::<TeamScores>();
     }
 }

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use lightyear::prelude::client::input::InputSystems;
@@ -21,6 +22,8 @@ use btl_shared::{
     Projectile, RailgunCharge, Rotation, SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS,
     TBOAT_MASS, TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo, ray_circle_intersect,
 };
+
+use crate::ZoneMarker;
 
 /// Convert the cursor position to world coordinates using the primary window and camera.
 fn cursor_world_pos(
@@ -142,9 +145,30 @@ type UninitPredicted = (With<Predicted>, Without<ShipInitialized>);
 type UninitInterpolated = (With<Interpolated>, Without<ShipInitialized>);
 type GunBarrelFilter = (With<GunBarrel>, Without<LocalShip>);
 
+// --- Camera zoom ---
+
+const ZOOM_MIN: f32 = 2.0;
+const ZOOM_MAX: f32 = 3.2;
+/// Scroll sensitivity (scale change per scroll tick)
+const ZOOM_SCROLL_STEP: f32 = 0.1;
+
+#[derive(Resource)]
+struct CameraZoom {
+    scale: f32,
+}
+
+impl Default for CameraZoom {
+    fn default() -> Self {
+        // Default at first third of the range
+        Self {
+            scale: ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) / 3.0,
+        }
+    }
+}
+
 // --- Route planning ---
 
-const ROUTE_ZOOM_SCALE: f32 = 4.0;
+const ROUTE_ZOOM_SCALE: f32 = 4.8;
 const ROUTE_ZOOM_SPEED: f32 = 6.0;
 const ROUTE_SAMPLE_COUNT: usize = 128;
 /// Minimum angle (radians) between consecutive waypoint segments.
@@ -152,9 +176,9 @@ const ROUTE_SAMPLE_COUNT: usize = 128;
 /// Angles sharper than ~60° are rejected.
 const MIN_WAYPOINT_ANGLE: f32 = std::f32::consts::FRAC_PI_3; // 60°
 /// Pure-pursuit look-ahead: scales with speed, clamped to this range.
-const LOOK_AHEAD_MIN: f32 = 40.0;
-const LOOK_AHEAD_MAX: f32 = 200.0;
-const LOOK_AHEAD_TIME: f32 = 0.5; // seconds of travel to look ahead
+const LOOK_AHEAD_MIN: f32 = 80.0;
+const LOOK_AHEAD_MAX: f32 = 400.0;
+const LOOK_AHEAD_TIME: f32 = 0.9; // seconds of travel to look ahead
 
 #[derive(Resource)]
 struct RoutePlanner {
@@ -177,8 +201,8 @@ impl Default for RoutePlanner {
             path: Vec::new(),
             curvatures: Vec::new(),
             last_rejected: false,
-            target_zoom: 1.0,
-            current_zoom: 1.0,
+            target_zoom: ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) / 3.0,
+            current_zoom: ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) / 3.0,
         }
     }
 }
@@ -275,17 +299,22 @@ fn create_gunship_mesh(r: f32) -> Mesh {
 
 /// Torpedo boat hull mesh: sleek medium body with side nacelles.
 fn create_torpedo_boat_mesh(r: f32) -> Mesh {
+    // Submarine shape: long, rounded bow, tapered stern
     let verts: Vec<[f32; 3]> = vec![
-        [0.0, r * 1.3, 0.0],        // 0: nose
-        [r * 0.2, r * 0.6, 0.0],    // 1: right forward
-        [r * 0.45, r * 0.2, 0.0],   // 2: right nacelle front
-        [r * 0.5, -r * 0.4, 0.0],   // 3: right nacelle rear
-        [r * 0.3, -r * 0.75, 0.0],  // 4: right tail
-        [0.0, -r * 0.6, 0.0],       // 5: center tail
-        [-r * 0.3, -r * 0.75, 0.0], // 6: left tail
-        [-r * 0.5, -r * 0.4, 0.0],  // 7: left nacelle rear
-        [-r * 0.45, r * 0.2, 0.0],  // 8: left nacelle front
-        [-r * 0.2, r * 0.6, 0.0],   // 9: left forward
+        [0.0, r * 1.35, 0.0],       // 0: bow tip
+        [r * 0.15, r * 1.2, 0.0],   // 1: right bow curve
+        [r * 0.28, r * 0.9, 0.0],   // 2: right forward hull
+        [r * 0.32, r * 0.4, 0.0],   // 3: right mid-forward (widest)
+        [r * 0.3, -r * 0.1, 0.0],   // 4: right mid-rear
+        [r * 0.25, -r * 0.5, 0.0],  // 5: right rear taper
+        [r * 0.15, -r * 0.8, 0.0],  // 6: right stern
+        [0.0, -r * 0.9, 0.0],       // 7: stern tip
+        [-r * 0.15, -r * 0.8, 0.0], // 8: left stern
+        [-r * 0.25, -r * 0.5, 0.0], // 9: left rear taper
+        [-r * 0.3, -r * 0.1, 0.0],  // 10: left mid-rear
+        [-r * 0.32, r * 0.4, 0.0],  // 11: left mid-forward (widest)
+        [-r * 0.28, r * 0.9, 0.0],  // 12: left forward hull
+        [-r * 0.15, r * 1.2, 0.0],  // 13: left bow curve
     ];
 
     let n = verts.len() as f32;
@@ -412,6 +441,7 @@ impl Plugin for ClientPlugin {
             cert_hash,
         });
 
+        app.init_resource::<CameraZoom>();
         app.init_resource::<RoutePlanner>();
         app.init_resource::<ClassPicker>();
 
@@ -436,7 +466,10 @@ impl Plugin for ClientPlugin {
                 update_gun_barrels,
                 update_turret_barrels,
                 camera_follow_local_ship,
+                scroll_zoom,
                 update_hud,
+                update_score_hud,
+                update_zone_colors,
             ),
         );
         app.add_systems(
@@ -456,7 +489,7 @@ impl Plugin for ClientPlugin {
                 render_route_gizmos,
             ),
         );
-        app.add_systems(Startup, (spawn_hud, spawn_class_picker));
+        app.add_systems(Startup, (spawn_hud, spawn_score_hud, spawn_class_picker));
     }
 }
 
@@ -514,7 +547,7 @@ fn buffer_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    ship_query: Query<&Transform, With<LocalShip>>,
+    ship_query: Query<(&Transform, &LinearVelocity), With<LocalShip>>,
     route_following: Query<(), (With<LocalShip>, With<RouteFollowing>)>,
     planner: Res<RoutePlanner>,
     mut picker: ResMut<ClassPicker>,
@@ -527,7 +560,7 @@ fn buffer_input(
     // Compute aim angle: direction from ship to mouse cursor in world space
     let aim_angle = cursor_world_pos(&windows, &camera_query)
         .and_then(|world_pos| {
-            let ship_pos = ship_query.single().ok()?.translation.truncate();
+            let ship_pos = ship_query.single().ok()?.0.translation.truncate();
             let delta = world_pos - ship_pos;
             (delta.length_squared() > 1.0).then(|| delta.y.atan2(delta.x))
         })
@@ -543,7 +576,7 @@ fn buffer_input(
         action_state.0 = ShipInput {
             thrust_forward: key(KeyCode::KeyW),
             thrust_backward: key(KeyCode::KeyS),
-            rotate: axis(KeyCode::KeyA, KeyCode::KeyD),
+            rotate: axis(KeyCode::KeyA, KeyCode::KeyD) * 0.6,
             strafe: axis(KeyCode::KeyQ, KeyCode::KeyE),
             afterburner: keypress.pressed(KeyCode::ShiftLeft),
             stabilize: key(KeyCode::KeyR),
@@ -621,6 +654,12 @@ fn init_predicted_ships(
                 InputMarker::<ShipInput>::default(),
                 LocalShip,
             ));
+            crate::particles::spawn_thruster_nozzles(
+                &mut commands,
+                entity,
+                &mut meshes,
+                &mut materials,
+            );
             info!(
                 "Spawned local {class:?} for {:?} on {:?} team",
                 player_id.0, team
@@ -1137,15 +1176,17 @@ fn render_laser_beams(
             }
         }
 
-        // Draw beam as fading segments
+        // Draw beam as fading segments (fade by absolute distance, not relative)
         let segments = 12;
         let offset_dir = Vec2::new(-aim_dir.y, aim_dir.x);
+        let seg_len = best_t / segments as f32;
         for i in 0..segments {
-            let t0 = i as f32 / segments as f32;
-            let t1 = (i + 1) as f32 / segments as f32;
-            let p0 = ship_pos + aim_dir * (best_t * t0);
-            let p1 = ship_pos + aim_dir * (best_t * t1);
-            let fade = 1.0 - 0.8 * ((t0 + t1) * 0.5); // fade to 20% at end
+            let d0 = seg_len * i as f32;
+            let d1 = seg_len * (i + 1) as f32;
+            let p0 = ship_pos + aim_dir * d0;
+            let p1 = ship_pos + aim_dir * d1;
+            let mid_dist = (d0 + d1) * 0.5;
+            let fade = 1.0 - 0.8 * (mid_dist / LASER_RANGE); // fade by absolute distance from source
             // Core beam
             gizmos.line_2d(
                 p0,
@@ -1252,6 +1293,15 @@ struct FuelBarFill;
 
 #[derive(Component)]
 struct AmmoBarFill;
+
+#[derive(Component)]
+struct ScoreBarRed;
+
+#[derive(Component)]
+struct ScoreBarBlue;
+
+#[derive(Component)]
+struct ScoreText;
 
 type HealthBarFilter = (
     With<HealthBarFill>,
@@ -1442,6 +1492,144 @@ fn spawn_hud(mut commands: Commands) {
         },
         TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)),
     ));
+}
+
+/// Spawn score HUD at top-center.
+fn spawn_score_hud(mut commands: Commands) {
+    let score_limit = btl_shared::SCORE_LIMIT as i32;
+
+    // Top-center panel
+    let panel = commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(Val::Px(-120.0)),
+            width: Val::Px(240.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(4.0),
+            ..default()
+        })
+        .id();
+
+    // Score text: "RED 0 — 0 BLUE"
+    commands.spawn((
+        ChildOf(panel),
+        ScoreText,
+        Text::new(format!("RED 0 / {score_limit}  —  0 / {score_limit} BLUE")),
+        TextFont {
+            font_size: 16.0,
+            ..default()
+        },
+        TextColor(Color::srgba(0.9, 0.9, 0.9, 0.9)),
+    ));
+
+    // Red score bar
+    let bar_row = commands
+        .spawn((
+            ChildOf(panel),
+            Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(4.0),
+                ..default()
+            },
+        ))
+        .id();
+
+    let red_bg = commands
+        .spawn((
+            ChildOf(bar_row),
+            Node {
+                width: Val::Px(100.0),
+                height: Val::Px(6.0),
+                flex_direction: FlexDirection::RowReverse,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.15, 0.05, 0.05, 0.6)),
+        ))
+        .id();
+
+    commands.spawn((
+        ChildOf(red_bg),
+        ScoreBarRed,
+        Node {
+            width: Val::Percent(0.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.9, 0.2, 0.2)),
+    ));
+
+    let blue_bg = commands
+        .spawn((
+            ChildOf(bar_row),
+            Node {
+                width: Val::Px(100.0),
+                height: Val::Px(6.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.05, 0.05, 0.15, 0.6)),
+        ))
+        .id();
+
+    commands.spawn((
+        ChildOf(blue_bg),
+        ScoreBarBlue,
+        Node {
+            width: Val::Percent(0.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.2, 0.2, 0.9)),
+    ));
+}
+
+/// Update score HUD from replicated TeamScores.
+fn update_score_hud(
+    scores_q: Query<&TeamScores>,
+    mut text_q: Query<&mut Text, With<ScoreText>>,
+    mut red_bar: Query<&mut Node, (With<ScoreBarRed>, Without<ScoreBarBlue>, Without<ScoreText>)>,
+    mut blue_bar: Query<&mut Node, (With<ScoreBarBlue>, Without<ScoreBarRed>, Without<ScoreText>)>,
+) {
+    let Ok(scores) = scores_q.single() else {
+        return;
+    };
+
+    let limit = btl_shared::SCORE_LIMIT;
+    let red_i = scores.red as i32;
+    let blue_i = scores.blue as i32;
+    let limit_i = limit as i32;
+
+    if let Ok(mut text) = text_q.single_mut() {
+        **text = format!("RED {red_i} / {limit_i}  —  {blue_i} / {limit_i} BLUE");
+    }
+
+    if let Ok(mut node) = red_bar.single_mut() {
+        node.width = Val::Percent((scores.red / limit * 100.0).min(100.0));
+    }
+
+    if let Ok(mut node) = blue_bar.single_mut() {
+        node.width = Val::Percent((scores.blue / limit * 100.0).min(100.0));
+    }
+}
+
+/// Color objective zone markers based on which team controls them.
+fn update_zone_colors(
+    scores_q: Query<&TeamScores>,
+    mut markers: Query<(&ZoneMarker, &mut Sprite)>,
+) {
+    let Ok(scores) = scores_q.single() else {
+        return;
+    };
+
+    for (zone, mut sprite) in markers.iter_mut() {
+        sprite.color = match scores.zone_control[zone.0] {
+            1 => Color::srgba(0.9, 0.25, 0.25, 0.6), // Red controls
+            2 => Color::srgba(0.25, 0.25, 0.9, 0.6),  // Blue controls
+            _ => Color::srgba(0.4, 0.4, 0.2, 0.5),    // Contested / empty
+        };
+    }
 }
 
 /// Spawn the class picker overlay (hidden by default, toggled with Tab).
@@ -1707,6 +1895,40 @@ fn camera_follow_local_ship(
     cam_transform.translation.y = ship_transform.translation.y;
 }
 
+// --- Camera zoom systems ---
+
+/// Handle scroll wheel to adjust camera zoom level.
+fn scroll_zoom(
+    scroll: Res<AccumulatedMouseScroll>,
+    mut zoom: ResMut<CameraZoom>,
+    planner: Res<RoutePlanner>,
+    mut camera_query: Query<&mut Projection, With<Camera2d>>,
+) {
+    // Don't apply scroll zoom while route planning (ctrl-zoom takes over)
+    if planner.active {
+        return;
+    }
+
+    let delta = match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
+    };
+
+    if delta == 0.0 {
+        return;
+    }
+
+    // Scroll up = zoom in (smaller scale), scroll down = zoom out (larger scale)
+    zoom.scale = (zoom.scale - delta * ZOOM_SCROLL_STEP).clamp(ZOOM_MIN, ZOOM_MAX);
+
+    let Ok(mut projection) = camera_query.single_mut() else {
+        return;
+    };
+    if let Projection::Orthographic(ref mut ortho) = *projection {
+        ortho.scale = zoom.scale;
+    }
+}
+
 // --- Route planning systems ---
 
 use btl_shared::{
@@ -1860,13 +2082,12 @@ fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
         return vec![];
     }
 
-    let accel = SHIP_THRUST * 0.8; // effective acceleration (conservative)
-    let decel = SHIP_STABILIZE_DECEL;
+    let accel = SHIP_THRUST; // full acceleration
+    let decel = SHIP_STABILIZE_DECEL * 0.8; // braking — trust stabilize more
 
-    // Curvature-based max speed at each point (with safety margin)
-    // Smooth curvatures forward: at each point, use the max curvature
-    // within a look-ahead window. This makes the ship anticipate curves.
-    let smooth_window = 15; // ~12% of 128-sample path
+    // Curvature-based max speed at each point
+    // Smooth curvatures forward: use max curvature in a look-ahead window
+    let smooth_window = 25;
     let mut max_curvature: Vec<f32> = vec![0.0; n];
     for i in 0..n {
         let end = (i + smooth_window).min(n);
@@ -1881,10 +2102,11 @@ fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
         .iter()
         .map(|&k| {
             if k > 0.001 {
-                // v_safe = ω_max / κ, with 0.35 safety margin
-                (SHIP_MAX_ANGULAR_SPEED * 0.35 / k).min(SHIP_MAX_SPEED * 0.7)
+                // Balanced: good speed with tighter tracking
+                let margin = 0.32 / (1.0 + k * 180.0);
+                (SHIP_MAX_ANGULAR_SPEED * margin / k).min(SHIP_MAX_SPEED * 0.78)
             } else {
-                SHIP_MAX_SPEED * 0.65
+                SHIP_MAX_SPEED * 0.78
             }
         })
         .collect();
@@ -1988,7 +2210,7 @@ fn path_lerp(path: &[Vec2], idx: f32) -> Vec2 {
 /// Returns the fractional index.
 fn find_closest_on_path(path: &[Vec2], pos: Vec2, start_idx: f32) -> f32 {
     let start = (start_idx as usize).saturating_sub(5);
-    let end = (start + 40).min(path.len() - 1); // search wider window
+    let end = (start + 60).min(path.len() - 1); // search wide window ahead
     let mut best_idx = start_idx;
     let mut best_dist = f32::MAX;
 
@@ -2028,6 +2250,7 @@ fn remaining_arc_length(path: &[Vec2], from_idx: f32) -> f32 {
 fn route_planning_input(
     mut commands: Commands,
     mut planner: ResMut<RoutePlanner>,
+    zoom: Res<CameraZoom>,
     keypress: Res<ButtonInput<KeyCode>>,
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
@@ -2053,6 +2276,7 @@ fn route_planning_input(
         planner.last_rejected = false;
         planner.target_zoom = ROUTE_ZOOM_SCALE;
 
+        // Placeholder start point (updated to actual position on release)
         if let Ok((_entity, ship_tf)) = ship_query.single() {
             planner.waypoints.push(ship_tf.translation.truncate());
         }
@@ -2085,13 +2309,22 @@ fn route_planning_input(
     // On CTRL release, commit the route
     if ctrl_just_released && planner.active {
         planner.active = false;
-        planner.target_zoom = 1.0;
+        planner.target_zoom = zoom.scale;
+
+        // Update start point to ship's current position (was placeholder from press)
+        if let Ok((_entity, ship_tf)) = ship_query.single() {
+            if !planner.waypoints.is_empty() {
+                planner.waypoints[0] = ship_tf.translation.truncate();
+            }
+            rebuild_route_path(&mut planner);
+        }
 
         if planner.path.len() >= 2
-            && let Ok((entity, _)) = ship_query.single()
+            && let Ok((entity, _ship_tf)) = ship_query.single()
         {
             let arc_lengths = compute_arc_lengths(&planner.path);
             let speed_profile = compute_speed_profile(&planner.curvatures, &arc_lengths);
+
             commands.entity(entity).insert(RouteFollowing {
                 path: planner.path.clone(),
                 curvatures: planner.curvatures.clone(),
@@ -2108,7 +2341,7 @@ fn route_planning_input(
 
     if !ctrl_held && planner.active {
         planner.active = false;
-        planner.target_zoom = 1.0;
+        planner.target_zoom = zoom.scale;
     }
 }
 
@@ -2271,6 +2504,7 @@ fn route_follow(
 
     let max_idx = (following.path.len() - 1) as f32;
 
+    // End route when progress reaches the end
     if following.progress >= max_idx - 0.1 {
         commands.entity(entity).remove::<RouteFollowing>();
         for mut action_state in input_query.iter_mut() {
@@ -2286,9 +2520,10 @@ fn route_follow(
     let ship_pos = ship_tf.translation.truncate();
     let speed = lin_vel.0.length();
 
-    // 1. Update progress (mutable write first)
+    // 1. Update progress (mutable write first, capped to prevent wild jumps)
     let proj = find_closest_on_path(&following.path, ship_pos, following.progress);
-    following.progress = proj.max(following.progress);
+    let max_advance = (speed * dt / 20.0).max(2.0); // ~max path indices per tick
+    following.progress = proj.max(following.progress).min(following.progress + max_advance);
 
     // 2. Cross-track error (signed, positive = left of path)
     let cte = cross_track_error(&following.path, ship_pos, following.progress);
@@ -2310,10 +2545,13 @@ fn route_follow(
     let tangent_here = path_tangent(path, progress);
 
     // 4. PURE PURSUIT: look ahead along the path, aim directly at that point
+    //    When off-track, look further ahead for a gentler rejoin angle
     let curvature_here = curvatures[progress as usize];
     let look_ahead_base = (speed * LOOK_AHEAD_TIME).clamp(LOOK_AHEAD_MIN, LOOK_AHEAD_MAX);
     let curvature_factor = (1.0 / (1.0 + curvature_here * 200.0)).clamp(0.4, 1.0);
-    let look_ahead_dist = look_ahead_base * curvature_factor;
+    // When off-track, look further ahead for smoother rejoin
+    let cte_boost = 1.0 + (cte.abs() / 40.0).min(1.0); // up to 2x look-ahead when off-track
+    let look_ahead_dist = look_ahead_base * curvature_factor * cte_boost;
     let look_ahead_idx = advance_by_arc_length(arc_lengths, progress, look_ahead_dist).min(max_idx);
     let look_ahead_pos = path_lerp(path, look_ahead_idx);
 
@@ -2331,11 +2569,13 @@ fn route_follow(
     let ship_heading = fwd_3d.y.atan2(fwd_3d.x);
     let heading_err = wrap_angle(desired_angle - ship_heading);
 
-    // 7. ROTATION CONTROL: bang-bang with damping
+    // 7. ROTATION CONTROL: time-optimal with angular velocity damping
     let alpha = SHIP_ANGULAR_DECEL;
+    let current_omega = _ang_vel.0;
     let omega_fb = heading_err.signum() * (2.0 * alpha * heading_err.abs()).sqrt();
-    let omega_desired = omega_fb.clamp(-SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_ANGULAR_SPEED);
-    let rotate = (omega_desired / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
+    // Blend: target the time-optimal angular velocity, but damp current overshoot
+    let omega_error = omega_fb - current_omega;
+    let rotate = (omega_error / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
 
     // 8. STRAFE: correct lateral drift when roughly aligned with path
     let path_normal = Vec2::new(-tangent_here.y, tangent_here.x);
@@ -2347,9 +2587,9 @@ fn route_follow(
     let cte_in_ship_right = cte * normal_in_ship;
     let integral_in_ship = cte_integral * normal_in_ship;
 
-    let k_p = 0.04;
-    let k_i = 0.008;
-    let k_d = 0.06;
+    let k_p = 0.08;
+    let k_i = 0.010;
+    let k_d = 0.12;
     let strafe_cmd =
         k_p * cte_in_ship_right + k_i * integral_in_ship + k_d * lateral_vel * normal_in_ship;
     // Only strafe when heading is roughly correct (within ±45°)
@@ -2371,6 +2611,10 @@ fn route_follow(
         1.0
     };
 
+    // 10b. CTE speed reduction — brake when off-track for tighter tracking
+    let cte_speed_factor = (1.0 / (1.0 + (cte.abs() / 60.0).powi(2))).max(0.40);
+    let target_speed = target_speed * cte_speed_factor;
+
     // 11. THRUST AND STABILIZE
     let speed_error = target_speed - speed;
     // Only gate thrust on heading — don't double-gate with alignment
@@ -2380,7 +2624,7 @@ fn route_follow(
     let stopping_dist = speed * speed / (2.0 * SHIP_STABILIZE_DECEL);
 
     let thrust_forward = if speed_error > 0.0 && remaining > stopping_dist * 1.5 {
-        (speed_error / 80.0).clamp(0.0, 1.0) * heading_factor
+        (speed_error / 60.0).clamp(0.0, 1.0) * heading_factor
     } else {
         0.0
     };

@@ -14,17 +14,19 @@ use btl_shared::{
     Asteroid, CLOAK_COOLDOWN, CLOAK_DURATION, Cloak, DEFENSE_TURRET_COOLDOWN,
     DEFENSE_TURRET_DAMAGE, DEFENSE_TURRET_FIRE_TOLERANCE, DEFENSE_TURRET_LIFETIME,
     DEFENSE_TURRET_MOUNTS, DEFENSE_TURRET_RANGE, DEFENSE_TURRET_SLEW_RATE, DEFENSE_TURRET_SPEED,
-    DRONE_AGGRO_RANGE, DRONE_KAMIKAZE_HEALTH, DRONE_KAMIKAZE_SPEED, DRONE_LASER_COUNT,
+    DRONE_AGGRO_RANGE, DRONE_DETONATION_DAMAGE, DRONE_DETONATION_RADIUS,
+    DRONE_KAMIKAZE_HEALTH, DRONE_KAMIKAZE_SPEED, DRONE_LASER_COUNT,
     DRONE_LASER_HEALTH, DRONE_LASER_RANGE, DRONE_MAX_COUNT, DRONE_ORBIT_RADIUS, DRONE_RESPAWN_TIME,
     DRONE_SPEED, Drone, HEAVY_CANNON_AMMO_COST, HEAVY_CANNON_COOLDOWN, HEAVY_CANNON_DAMAGE,
     HEAVY_CANNON_LIFETIME, HEAVY_CANNON_SPEED, HEAVY_MUZZLE_OFFSET, LASER_AMMO_COST, LASER_DPS,
     LASER_RANGE, MINE_ARM_TIME, MINE_COOLDOWN, MINE_DAMAGE, MINE_DROP_SPEED, MINE_LIFETIME,
-    MINE_MAX_ACTIVE, MUZZLE_OFFSET, NebulaSeed, PULSE_COOLDOWN, PULSE_RADIUS, RAILGUN_CHARGE_TIME,
-    RAILGUN_COOLDOWN, RAILGUN_DAMAGE, RAILGUN_LIFETIME, RAILGUN_SPEED, RailgunCharge, ShipBundle,
-    TBOAT_RADIUS, TORPEDO_COOLDOWN, TORPEDO_DAMAGE, TORPEDO_LIFETIME, TORPEDO_MAX_ACTIVE,
-    TORPEDO_MUZZLE_OFFSET, TORPEDO_SPEED, TORPEDO_TURN_RATE, TURRET_COOLDOWN, TURRET_DAMAGE,
-    TURRET_FIRE_TOLERANCE, TURRET_LIFETIME, TURRET_MOUNTS, TURRET_RANGE, TURRET_SLEW_RATE,
-    TURRET_SPEED, Torpedo, generate_asteroid_layout, ray_circle_intersect,
+    MINE_MAX_ACTIVE, MUZZLE_OFFSET, NebulaSeed, OBJECTIVE_ZONE_RADIUS, PULSE_COOLDOWN,
+    PULSE_RADIUS, RAILGUN_CHARGE_TIME, RAILGUN_COOLDOWN, RAILGUN_DAMAGE, RAILGUN_LIFETIME,
+    RAILGUN_SPEED, RailgunCharge, SCORE_LIMIT, ShipBundle, TBOAT_RADIUS, TORPEDO_COOLDOWN,
+    TORPEDO_DAMAGE, TORPEDO_LIFETIME, TORPEDO_MAX_ACTIVE, TORPEDO_MUZZLE_OFFSET, TORPEDO_SPEED,
+    TORPEDO_TURN_RATE, TURRET_COOLDOWN, TURRET_DAMAGE, TURRET_FIRE_TOLERANCE, TURRET_LIFETIME,
+    TURRET_MOUNTS, TURRET_RANGE, TURRET_SLEW_RATE, TURRET_SPEED, Torpedo, ZONE_SCORE_RATE,
+    generate_asteroid_layout, objective_zone_positions, ray_circle_intersect,
 };
 
 /// Server-only component tracking drone squad state for Drone Commander ships.
@@ -57,7 +59,7 @@ impl Plugin for ServerPlugin {
         });
 
         app.init_resource::<RespawnQueue>();
-        app.add_systems(Startup, (start_server, spawn_asteroids, spawn_nebula));
+        app.add_systems(Startup, (start_server, spawn_asteroids, spawn_nebula, spawn_scores));
         app.add_systems(
             FixedUpdate,
             (
@@ -93,6 +95,7 @@ impl Plugin for ServerPlugin {
                 btl_shared::drone_kamikaze_impact,
             ),
         );
+        app.add_systems(FixedUpdate, update_zone_scores);
         app.add_observer(handle_new_client_link);
         app.add_observer(handle_client_connected);
     }
@@ -1043,20 +1046,24 @@ fn swarm_commander(
     }
 }
 
-/// Anti-drone pulse: DroneCommander presses drop_mine to destroy all nearby drones.
+/// Anti-drone pulse: DroneCommander presses drop_mine to detonate all nearby drones.
+/// Each drone explodes, dealing area damage to nearby enemy ships.
 fn server_anti_drone_pulse(
     mut commands: Commands,
     mut query: Query<(
         &lightyear::prelude::input::native::ActionState<ShipInput>,
         &ShipClass,
         &Position,
+        &Team,
         &mut MineCooldown,
     )>,
-    drones: Query<(Entity, &Position), With<Drone>>,
+    drones: Query<(Entity, &Position, &Drone)>,
+    mut ships: Query<(&Position, &Team, &mut Health)>,
 ) {
     let pulse_dist_sq = PULSE_RADIUS * PULSE_RADIUS;
+    let blast_dist_sq = DRONE_DETONATION_RADIUS * DRONE_DETONATION_RADIUS;
 
-    for (input, class, pos, mut cooldown) in query.iter_mut() {
+    for (input, class, pos, team, mut cooldown) in query.iter_mut() {
         if *class != ShipClass::DroneCommander {
             continue;
         }
@@ -1066,13 +1073,79 @@ fn server_anti_drone_pulse(
 
         cooldown.remaining = PULSE_COOLDOWN;
 
-        // Destroy ALL drones within pulse radius (friend and foe)
-        for (drone_entity, drone_pos) in drones.iter() {
+        // Detonate ALL drones within pulse radius (friend and foe)
+        for (drone_entity, drone_pos, _drone) in drones.iter() {
             if (drone_pos.0 - pos.0).length_squared() < pulse_dist_sq {
-                commands.entity(drone_entity).despawn();
+                // Each drone explodes — deal area damage to nearby enemy ships
+                for (ship_pos, ship_team, mut health) in ships.iter_mut() {
+                    if *ship_team == *team {
+                        continue;
+                    }
+                    if (drone_pos.0 - ship_pos.0).length_squared() < blast_dist_sq {
+                        health.current =
+                            (health.current - DRONE_DETONATION_DAMAGE).max(0.0);
+                    }
+                }
+                commands.entity(drone_entity).try_despawn();
             }
         }
     }
+}
+
+/// Spawn the replicated TeamScores entity.
+fn spawn_scores(mut commands: Commands) {
+    commands.spawn((
+        TeamScores::default(),
+        Replicate::to_clients(NetworkTarget::All),
+    ));
+    info!("Spawned TeamScores entity (score limit: {SCORE_LIMIT})");
+}
+
+/// King-of-the-hill: count ships per team in each zone, award points to majority holder.
+fn update_zone_scores(
+    mut scores_q: Query<&mut TeamScores>,
+    ships: Query<(&Position, &Team), With<Health>>,
+) {
+    let Ok(mut scores) = scores_q.single_mut() else {
+        return;
+    };
+
+    // Already won — freeze scores
+    if scores.red >= SCORE_LIMIT || scores.blue >= SCORE_LIMIT {
+        return;
+    }
+
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let zones = objective_zone_positions();
+    let r2 = OBJECTIVE_ZONE_RADIUS * OBJECTIVE_ZONE_RADIUS;
+
+    for (i, center) in zones.iter().enumerate() {
+        let mut red = 0u32;
+        let mut blue = 0u32;
+
+        for (pos, team) in ships.iter() {
+            if (pos.0 - *center).length_squared() <= r2 {
+                match team {
+                    Team::Red => red += 1,
+                    Team::Blue => blue += 1,
+                }
+            }
+        }
+
+        if red > blue {
+            scores.zone_control[i] = 1;
+            scores.red += ZONE_SCORE_RATE * dt;
+        } else if blue > red {
+            scores.zone_control[i] = 2;
+            scores.blue += ZONE_SCORE_RATE * dt;
+        } else {
+            scores.zone_control[i] = 0; // contested or empty
+        }
+    }
+
+    // Clamp at limit
+    scores.red = scores.red.min(SCORE_LIMIT);
+    scores.blue = scores.blue.min(SCORE_LIMIT);
 }
 
 /// Spawn initial batch of drones when a DroneCommander first appears.

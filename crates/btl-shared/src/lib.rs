@@ -54,7 +54,7 @@ pub const AUTOCANNON_SPEED: f32 = 800.0;
 /// Damage per hit
 pub const AUTOCANNON_DAMAGE: f32 = 8.0;
 /// Projectile lifetime in seconds
-pub const AUTOCANNON_LIFETIME: f32 = 2.0;
+pub const AUTOCANNON_LIFETIME: f32 = 3.2;
 /// Projectile collider radius
 pub const PROJECTILE_RADIUS: f32 = 3.0;
 /// Muzzle offset from ship center (spawn at ship edge)
@@ -95,7 +95,7 @@ pub const GUNSHIP_AMMO_REGEN: f32 = 1.0;
 pub const HEAVY_CANNON_COOLDOWN: f32 = 0.667; // ~1.5 rounds/s
 pub const HEAVY_CANNON_SPEED: f32 = 600.0;
 pub const HEAVY_CANNON_DAMAGE: f32 = 35.0;
-pub const HEAVY_CANNON_LIFETIME: f32 = 3.0;
+pub const HEAVY_CANNON_LIFETIME: f32 = 4.8;
 pub const HEAVY_CANNON_AMMO_COST: f32 = 3.0;
 pub const HEAVY_PROJECTILE_RADIUS: f32 = 5.0;
 pub const HEAVY_MUZZLE_OFFSET: f32 = GUNSHIP_RADIUS + HEAVY_PROJECTILE_RADIUS + 2.0;
@@ -106,8 +106,8 @@ pub const TURRET_COUNT: usize = 3;
 pub const TURRET_COOLDOWN: f32 = 0.333; // ~3 rounds/s
 pub const TURRET_SPEED: f32 = 700.0;
 pub const TURRET_DAMAGE: f32 = 5.0;
-pub const TURRET_LIFETIME: f32 = 1.0;
-pub const TURRET_RANGE: f32 = 1000.0;
+pub const TURRET_LIFETIME: f32 = 1.6;
+pub const TURRET_RANGE: f32 = 1600.0;
 /// Max turret rotation speed (radians/sec)
 pub const TURRET_SLEW_RATE: f32 = 4.0;
 /// Angle tolerance for firing (radians)
@@ -134,7 +134,7 @@ pub const TBOAT_AMMO_REGEN: f32 = 3.0;
 
 // --- Laser (Torpedo Boat primary, continuous beam) ---
 
-pub const LASER_RANGE: f32 = 800.0;
+pub const LASER_RANGE: f32 = 1280.0;
 pub const LASER_DPS: f32 = 20.0;
 /// Ammo consumed per second while laser is firing
 pub const LASER_AMMO_COST: f32 = 5.0;
@@ -143,7 +143,7 @@ pub const LASER_AMMO_COST: f32 = 5.0;
 
 pub const TORPEDO_SPEED: f32 = 110.0;
 pub const TORPEDO_DAMAGE: f32 = 70.0;
-pub const TORPEDO_LIFETIME: f32 = 20.0;
+pub const TORPEDO_LIFETIME: f32 = 32.0;
 /// Max homing turn rate in radians/sec
 pub const TORPEDO_TURN_RATE: f32 = 0.8;
 pub const TORPEDO_COOLDOWN: f32 = 3.0;
@@ -173,7 +173,7 @@ pub const RAILGUN_COOLDOWN: f32 = 5.0;
 /// Railgun projectile speed (very fast)
 pub const RAILGUN_SPEED: f32 = 3500.0;
 /// Railgun projectile lifetime (seconds)
-pub const RAILGUN_LIFETIME: f32 = 1.5;
+pub const RAILGUN_LIFETIME: f32 = 2.4;
 /// Railgun projectile collision radius
 pub const RAILGUN_PROJECTILE_RADIUS: f32 = 3.0;
 
@@ -201,8 +201,8 @@ pub const DEFENSE_TURRET_COUNT: usize = 5;
 pub const DEFENSE_TURRET_COOLDOWN: f32 = 0.5;
 pub const DEFENSE_TURRET_SPEED: f32 = 600.0;
 pub const DEFENSE_TURRET_DAMAGE: f32 = 3.0;
-pub const DEFENSE_TURRET_LIFETIME: f32 = 0.8;
-pub const DEFENSE_TURRET_RANGE: f32 = 750.0;
+pub const DEFENSE_TURRET_LIFETIME: f32 = 1.28;
+pub const DEFENSE_TURRET_RANGE: f32 = 1200.0;
 pub const DEFENSE_TURRET_SLEW_RATE: f32 = 5.0;
 pub const DEFENSE_TURRET_FIRE_TOLERANCE: f32 = 0.2;
 pub const DEFENSE_TURRET_PROJECTILE_RADIUS: f32 = 2.0;
@@ -223,12 +223,12 @@ pub const DRONE_KAMIKAZE_COUNT: usize = 3;
 pub const DRONE_MAX_COUNT: usize = DRONE_LASER_COUNT + DRONE_KAMIKAZE_COUNT;
 pub const DRONE_RADIUS: f32 = 6.0;
 pub const DRONE_SPEED: f32 = 500.0;
-pub const DRONE_AGGRO_RANGE: f32 = 1200.0;
+pub const DRONE_AGGRO_RANGE: f32 = 1920.0;
 pub const DRONE_ORBIT_RADIUS: f32 = 80.0;
 pub const DRONE_RESPAWN_TIME: f32 = 8.0;
 // Laser drone stats
 pub const DRONE_LASER_HEALTH: f32 = 12.0;
-pub const DRONE_LASER_RANGE: f32 = 500.0;
+pub const DRONE_LASER_RANGE: f32 = 800.0;
 pub const DRONE_LASER_DPS: f32 = 15.0; // higher to compensate for pulsed firing
 pub const DRONE_LASER_BURST: f32 = 0.25; // seconds firing per burst
 pub const DRONE_LASER_PAUSE_MIN: f32 = 0.4;
@@ -251,14 +251,18 @@ pub const DRONE_KAMIKAZE_HEALTH: f32 = 8.0;
 pub const DRONE_KAMIKAZE_DAMAGE: f32 = 40.0;
 pub const DRONE_KAMIKAZE_SPEED: f32 = 600.0;
 
-// --- Anti-drone pulse ---
+// --- Anti-drone pulse / drone detonation ---
 
 pub const PULSE_RADIUS: f32 = 400.0;
 pub const PULSE_COOLDOWN: f32 = 20.0;
+/// Blast radius of each drone when detonated by pulse.
+pub const DRONE_DETONATION_RADIUS: f32 = 80.0;
+/// Damage dealt by each detonating drone to nearby enemy ships.
+pub const DRONE_DETONATION_DAMAGE: f32 = 25.0;
 
 // --- Map constants ---
 
-pub const MAP_RADIUS: f32 = 6000.0;
+pub const MAP_RADIUS: f32 = 10000.0;
 // Ships start slowing in the boundary zone and get reflected
 const BOUNDARY_ZONE: f32 = 200.0;
 const BOUNDARY_REFLECT_SPEED: f32 = 50.0;
@@ -271,6 +275,10 @@ pub const TRIDRANT_COUNT: usize = 3;
 pub const OBJECTIVE_DISTANCE: f32 = MAP_RADIUS * 0.6;
 /// Radius of each capture zone
 pub const OBJECTIVE_ZONE_RADIUS: f32 = 300.0;
+/// Points per second while controlling a zone
+pub const ZONE_SCORE_RATE: f32 = 1.0;
+/// Score needed to win
+pub const SCORE_LIMIT: f32 = 100.0;
 
 /// Returns the center positions of the 3 objective zones.
 /// Tridrant bisectors are at 90°, 210°, 330° (first one points up).
@@ -520,9 +528,9 @@ impl ShipBundle {
                 GUNSHIP_MAX_AMMO,
                 Turrets {
                     mounts: (0..TURRET_COUNT)
-                        .map(|_| TurretState {
+                        .map(|i| TurretState {
                             aim_angle: 0.0,
-                            cooldown: 0.0,
+                            cooldown: TURRET_COOLDOWN * i as f32 / TURRET_COUNT as f32,
                         })
                         .collect(),
                 },
@@ -548,9 +556,9 @@ impl ShipBundle {
                 DCOMMANDER_MAX_AMMO,
                 Turrets {
                     mounts: (0..DEFENSE_TURRET_COUNT)
-                        .map(|_| TurretState {
+                        .map(|i| TurretState {
                             aim_angle: 0.0,
-                            cooldown: 0.0,
+                            cooldown: DEFENSE_TURRET_COOLDOWN * i as f32 / DEFENSE_TURRET_COUNT as f32,
                         })
                         .collect(),
                 },
@@ -726,7 +734,7 @@ fn update_projectile_lifetime(
 
         proj.lifetime -= dt;
         if proj.lifetime <= 0.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -755,7 +763,7 @@ fn update_mine_lifetime(
                     health.current = (health.current - mine.damage).max(0.0);
                 }
             }
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -802,7 +810,7 @@ fn check_projectile_asteroid_collisions(
         for (ast_pos, asteroid) in asteroids.iter() {
             let hit_dist = PROJECTILE_RADIUS + asteroid.radius;
             if (proj_pos.0 - ast_pos.0).length_squared() < hit_dist * hit_dist {
-                commands.entity(proj_entity).despawn();
+                commands.entity(proj_entity).try_despawn();
                 break;
             }
         }
@@ -870,7 +878,7 @@ pub fn check_mine_detonations(
         }
 
         if detonated {
-            commands.entity(mine_entity).despawn();
+            commands.entity(mine_entity).try_despawn();
         }
     }
 }
@@ -915,7 +923,7 @@ pub fn check_projectile_hits(
             let delta = proj_pos.0 - ship_pos.0;
             if delta.length_squared() < hit_dist * hit_dist {
                 health.current = (health.current - proj.damage).max(0.0);
-                commands.entity(proj_entity).despawn();
+                commands.entity(proj_entity).try_despawn();
                 break;
             }
         }
@@ -939,7 +947,7 @@ pub fn check_projectile_asteroid_hits(
             let hit_dist = proj_radius + ast.radius;
             let delta = proj_pos.0 - ast_pos.0;
             if delta.length_squared() < hit_dist * hit_dist {
-                commands.entity(proj_entity).despawn();
+                commands.entity(proj_entity).try_despawn();
                 break;
             }
         }
@@ -979,7 +987,7 @@ pub fn update_torpedo_lifetime(
         pos.0 += vel.0 * dt;
         torp.lifetime -= dt;
         if torp.lifetime <= 0.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -997,8 +1005,8 @@ pub fn check_torpedo_shootdown(
             }
             let hit_dist = PROJECTILE_RADIUS + TORPEDO_RADIUS;
             if (proj_pos.0 - torp_pos.0).length_squared() < hit_dist * hit_dist {
-                commands.entity(proj_entity).despawn();
-                commands.entity(torp_entity).despawn();
+                commands.entity(proj_entity).try_despawn();
+                commands.entity(torp_entity).try_despawn();
                 break;
             }
         }
@@ -1024,9 +1032,9 @@ pub fn check_projectile_drone_hits(
             let hit_dist = PROJECTILE_RADIUS + DRONE_RADIUS;
             if (proj_pos.0 - drone_pos.0).length_squared() < hit_dist * hit_dist {
                 drone.health -= proj.damage;
-                commands.entity(proj_entity).despawn();
+                commands.entity(proj_entity).try_despawn();
                 if drone.health <= 0.0 {
-                    commands.entity(drone_entity).despawn();
+                    commands.entity(drone_entity).try_despawn();
                 }
                 break;
             }
@@ -1103,7 +1111,7 @@ pub fn drone_kamikaze_impact(
             let hit_dist = DRONE_RADIUS + ship_radius;
             if (drone_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
                 health.current = (health.current - DRONE_KAMIKAZE_DAMAGE).max(0.0);
-                commands.entity(drone_entity).despawn();
+                commands.entity(drone_entity).try_despawn();
                 break;
             }
         }
@@ -1131,7 +1139,7 @@ pub fn check_torpedo_hits(
             let hit_dist = TORPEDO_RADIUS + ship_radius;
             if (torp_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
                 health.current = (health.current - torp.damage).max(0.0);
-                commands.entity(torp_entity).despawn();
+                commands.entity(torp_entity).try_despawn();
                 break;
             }
         }

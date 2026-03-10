@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use btl_protocol::{Mine, Projectile};
+use btl_protocol::{Drone, Mine, PlayerId, Projectile, Team};
 use btl_shared::Position;
 
 pub struct EffectsPlugin;
@@ -31,6 +31,8 @@ impl Plugin for EffectsPlugin {
 struct EntityPositionCache {
     projectiles: HashMap<Entity, (Vec2, f32)>, // (position, remaining lifetime)
     mines: HashMap<Entity, (Vec2, f32)>,       // (position, remaining lifetime)
+    ships: HashMap<Entity, (Vec2, Team)>,      // (position, team) for death explosions
+    drones: HashMap<Entity, Vec2>,             // (position) for detonation explosions
 }
 
 #[derive(Resource, Deref, DerefMut)]
@@ -56,6 +58,8 @@ fn detect_despawned_effects(
     cache: Res<EntityPositionCache>,
     mut removed_projectiles: RemovedComponents<Projectile>,
     mut removed_mines: RemovedComponents<Mine>,
+    mut removed_ships: RemovedComponents<PlayerId>,
+    mut removed_drones: RemovedComponents<Drone>,
     mut rng: ResMut<EffectRng>,
 ) {
     for entity in removed_projectiles.read() {
@@ -74,12 +78,26 @@ fn detect_despawned_effects(
             }
         }
     }
+
+    for entity in removed_ships.read() {
+        if let Some(&(pos, team)) = cache.ships.get(&entity) {
+            spawn_ship_explosion(&mut commands, pos, &team, &mut rng);
+        }
+    }
+
+    for entity in removed_drones.read() {
+        if let Some(&pos) = cache.drones.get(&entity) {
+            spawn_drone_detonation(&mut commands, pos, &mut rng);
+        }
+    }
 }
 
 /// Update cache with current frame's positions (runs after despawn detection).
 fn update_entity_cache(
     projectiles: Query<(Entity, &Position, &Projectile)>,
     mines: Query<(Entity, &Position, &Mine)>,
+    ships: Query<(Entity, &Position, &Team), With<PlayerId>>,
+    drones: Query<(Entity, &Position), With<Drone>>,
     mut cache: ResMut<EntityPositionCache>,
 ) {
     cache.projectiles.clear();
@@ -89,6 +107,14 @@ fn update_entity_cache(
     cache.mines.clear();
     for (entity, pos, mine) in mines.iter() {
         cache.mines.insert(entity, (pos.0, mine.lifetime));
+    }
+    cache.ships.clear();
+    for (entity, pos, team) in ships.iter() {
+        cache.ships.insert(entity, (pos.0, *team));
+    }
+    cache.drones.clear();
+    for (entity, pos) in drones.iter() {
+        cache.drones.insert(entity, pos.0);
     }
 }
 
@@ -206,6 +232,161 @@ fn spawn_mine_detonation(commands: &mut Commands, pos: Vec2, rng: &mut EffectRng
                 ..default()
             },
             Transform::from_xyz(pos.x, pos.y, 5.7),
+        ));
+    }
+}
+
+/// Drone detonation: small bright cyan/white flash + fast sparks.
+fn spawn_drone_detonation(commands: &mut Commands, pos: Vec2, rng: &mut EffectRng) {
+    // Central flash — cyan/white
+    commands.spawn((
+        FlashEffect { lifetime: 0.08 },
+        Sprite {
+            color: Color::LinearRgba(LinearRgba::new(2.0, 4.0, 6.0, 1.0)),
+            custom_size: Some(Vec2::splat(20.0)),
+            ..default()
+        },
+        Transform::from_xyz(pos.x, pos.y, 6.0),
+    ));
+
+    // Fast sparks radiating outward
+    for _ in 0..10 {
+        let angle = rng.next_f32() * std::f32::consts::TAU;
+        let speed = 200.0 + rng.next_f32() * 150.0;
+        let vel = Vec2::new(angle.cos(), angle.sin()) * speed;
+        commands.spawn((
+            EffectParticle {
+                velocity: vel,
+                lifetime: 0.15 + rng.next_f32() * 0.08,
+                max_lifetime: 0.2,
+                start_size: 2.5,
+                end_size: 0.5,
+            },
+            Sprite {
+                color: Color::LinearRgba(LinearRgba::new(1.5, 3.0, 5.0, 0.9)),
+                custom_size: Some(Vec2::splat(2.5)),
+                ..default()
+            },
+            Transform::from_xyz(pos.x, pos.y, 5.8),
+        ));
+    }
+
+    // Hot debris
+    for _ in 0..5 {
+        let angle = rng.next_f32() * std::f32::consts::TAU;
+        let speed = 60.0 + rng.next_f32() * 100.0;
+        let vel = Vec2::new(angle.cos(), angle.sin()) * speed;
+        commands.spawn((
+            EffectParticle {
+                velocity: vel,
+                lifetime: 0.2 + rng.next_f32() * 0.1,
+                max_lifetime: 0.3,
+                start_size: 1.5,
+                end_size: 0.3,
+            },
+            Sprite {
+                color: Color::LinearRgba(LinearRgba::new(3.0, 2.0, 1.0, 0.7)),
+                custom_size: Some(Vec2::splat(1.5)),
+                ..default()
+            },
+            Transform::from_xyz(pos.x, pos.y, 5.7),
+        ));
+    }
+}
+
+/// Ship death explosion: large flash + expanding fireball + team-colored debris.
+fn spawn_ship_explosion(commands: &mut Commands, pos: Vec2, team: &Team, rng: &mut EffectRng) {
+    // Large central flash
+    commands.spawn((
+        FlashEffect { lifetime: 0.2 },
+        Sprite {
+            color: Color::LinearRgba(LinearRgba::new(8.0, 6.0, 3.0, 1.0)),
+            custom_size: Some(Vec2::splat(80.0)),
+            ..default()
+        },
+        Transform::from_xyz(pos.x, pos.y, 7.0),
+    ));
+
+    // Secondary flash (slightly delayed feel via smaller initial size)
+    commands.spawn((
+        FlashEffect { lifetime: 0.15 },
+        Sprite {
+            color: Color::LinearRgba(LinearRgba::new(10.0, 8.0, 6.0, 0.8)),
+            custom_size: Some(Vec2::splat(50.0)),
+            ..default()
+        },
+        Transform::from_xyz(pos.x, pos.y, 7.1),
+    ));
+
+    // Expanding fireball ring
+    let ring_count = 24;
+    for i in 0..ring_count {
+        let angle = (i as f32 / ring_count as f32) * std::f32::consts::TAU
+            + (rng.next_f32() - 0.5) * 0.3;
+        let speed = 200.0 + rng.next_f32() * 200.0;
+        let vel = Vec2::new(angle.cos(), angle.sin()) * speed;
+        commands.spawn((
+            EffectParticle {
+                velocity: vel,
+                lifetime: 0.3 + rng.next_f32() * 0.15,
+                max_lifetime: 0.4,
+                start_size: 6.0 + rng.next_f32() * 4.0,
+                end_size: 1.0,
+            },
+            Sprite {
+                color: Color::LinearRgba(LinearRgba::new(5.0, 2.0, 0.8, 1.0)),
+                custom_size: Some(Vec2::splat(6.0)),
+                ..default()
+            },
+            Transform::from_xyz(pos.x, pos.y, 6.5),
+        ));
+    }
+
+    // Team-colored hull debris (larger, slower pieces)
+    let team_color = match team {
+        Team::Red => LinearRgba::new(1.2, 0.3, 0.2, 0.9),
+        Team::Blue => LinearRgba::new(0.2, 0.3, 1.2, 0.9),
+    };
+    for _ in 0..12 {
+        let angle = rng.next_f32() * std::f32::consts::TAU;
+        let speed = 60.0 + rng.next_f32() * 160.0;
+        let vel = Vec2::new(angle.cos(), angle.sin()) * speed;
+        commands.spawn((
+            EffectParticle {
+                velocity: vel,
+                lifetime: 0.5 + rng.next_f32() * 0.4,
+                max_lifetime: 0.8,
+                start_size: 3.0 + rng.next_f32() * 2.0,
+                end_size: 0.5,
+            },
+            Sprite {
+                color: Color::LinearRgba(team_color),
+                custom_size: Some(Vec2::splat(3.0)),
+                ..default()
+            },
+            Transform::from_xyz(pos.x, pos.y, 6.2),
+        ));
+    }
+
+    // Hot sparks (fast, tiny, bright)
+    for _ in 0..16 {
+        let angle = rng.next_f32() * std::f32::consts::TAU;
+        let speed = 300.0 + rng.next_f32() * 300.0;
+        let vel = Vec2::new(angle.cos(), angle.sin()) * speed;
+        commands.spawn((
+            EffectParticle {
+                velocity: vel,
+                lifetime: 0.15 + rng.next_f32() * 0.1,
+                max_lifetime: 0.2,
+                start_size: 2.0,
+                end_size: 0.3,
+            },
+            Sprite {
+                color: Color::LinearRgba(LinearRgba::new(6.0, 5.0, 2.0, 1.0)),
+                custom_size: Some(Vec2::splat(2.0)),
+                ..default()
+            },
+            Transform::from_xyz(pos.x, pos.y, 6.8),
         ));
     }
 }
