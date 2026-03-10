@@ -1,10 +1,18 @@
 use avian2d::prelude::{AngularVelocity, LinearVelocity};
 use bevy::prelude::*;
 
-use crate::client::LocalShip;
+use crate::client::{LocalShip, TorpedoInitialized};
 use btl_protocol::{Fuel, ShipInput};
 use btl_shared::SHIP_RADIUS;
 use lightyear::prelude::input::native::{ActionState, InputMarker};
+
+// Torpedo plume constants
+const TORP_PLUME_RATE: f32 = 200.0;
+const TORP_PLUME_LIFETIME: f32 = 0.25;
+const TORP_PLUME_SPEED: f32 = 120.0;
+const TORP_PLUME_SIZE_START: f32 = 2.5;
+const TORP_PLUME_CONE: f32 = 0.25;
+const TORP_COLOR_START: Vec3 = Vec3::new(0.9, 0.85, 0.5);
 
 const PARTICLE_LIFETIME: f32 = 0.12;
 const PARTICLE_SPEED_MIN: f32 = 800.0;
@@ -68,7 +76,10 @@ impl Plugin for ParticlePlugin {
         app.insert_resource(ParticleRng(btl_shared::rng::Rng::new(
             0xDEAD_BEEF_CAFE_1234,
         )));
-        app.add_systems(Update, (spawn_thruster_particles, update_particles));
+        app.add_systems(
+            Update,
+            (spawn_thruster_particles, spawn_torpedo_plume, update_particles),
+        );
     }
 }
 
@@ -350,6 +361,73 @@ fn spawn_thruster_particles(
                 spawn_cone(rf, -right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
                 spawn_cone(lr, right, alpha, CONE_HALF_ANGLE * 1.2, stab_count, false);
             }
+        }
+    }
+}
+
+/// Spawn exhaust plume particles behind torpedoes.
+fn spawn_torpedo_plume(
+    mut commands: Commands,
+    torpedoes: Query<(&Transform, &LinearVelocity), With<TorpedoInitialized>>,
+    time: Res<Time>,
+    mut rng: ResMut<ParticleRng>,
+) {
+    let dt = time.delta_secs();
+    let count_per_frame = (TORP_PLUME_RATE * dt).ceil() as usize;
+
+    for (tf, vel) in torpedoes.iter() {
+        let torp_pos = tf.translation.truncate();
+        let speed = vel.0.length();
+        if speed < 1.0 {
+            continue;
+        }
+        let forward = vel.0 / speed;
+        let exhaust_dir = -forward;
+        let exhaust_pos = torp_pos + exhaust_dir * 6.0;
+
+        for _ in 0..count_per_frame {
+            let angle = rng.next_signed() * TORP_PLUME_CONE;
+            let cos_a = angle.cos();
+            let sin_a = angle.sin();
+            let dir = Vec2::new(
+                exhaust_dir.x * cos_a - exhaust_dir.y * sin_a,
+                exhaust_dir.x * sin_a + exhaust_dir.y * cos_a,
+            );
+
+            let particle_speed = TORP_PLUME_SPEED * (0.6 + rng.next_f32() * 0.8);
+            let particle_vel = dir * particle_speed + vel.0 * 0.3;
+
+            let lifetime = TORP_PLUME_LIFETIME * (0.7 + rng.next_f32() * 0.6);
+            let size = TORP_PLUME_SIZE_START * (0.6 + rng.next_f32() * 0.8);
+
+            let jitter = rng.next_signed() * 2.0;
+            let perp = Vec2::new(-exhaust_dir.y, exhaust_dir.x);
+            let spawn_pos = exhaust_pos + perp * jitter;
+
+            let color = Color::LinearRgba(LinearRgba::new(
+                TORP_COLOR_START.x,
+                TORP_COLOR_START.y,
+                TORP_COLOR_START.z,
+                0.8,
+            ));
+
+            commands.spawn((
+                Particle {
+                    velocity: particle_vel,
+                    lifetime,
+                    max_lifetime: lifetime,
+                    start_alpha: 0.8,
+                    is_halo: false,
+                    start_size: size,
+                    afterburner: false,
+                },
+                Sprite {
+                    color,
+                    custom_size: Some(Vec2::splat(size)),
+                    ..default()
+                },
+                Transform::from_xyz(spawn_pos.x, spawn_pos.y, 4.5),
+            ));
         }
     }
 }

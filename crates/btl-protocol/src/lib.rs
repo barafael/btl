@@ -26,6 +26,66 @@ pub enum Team {
     Blue,
 }
 
+/// Ship class determines weapons, stats, and visuals.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Copy, Default)]
+pub enum ShipClass {
+    #[default]
+    Interceptor,
+    Gunship,
+    TorpedoBoat,
+    Sniper,
+    DroneCommander,
+}
+
+impl ShipClass {
+    /// Convert from class_request u8: 1=Interceptor, 2=Gunship, 3=TorpedoBoat, 4=Sniper, 5=DroneCommander, 0/other=None.
+    pub fn from_request(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(ShipClass::Interceptor),
+            2 => Some(ShipClass::Gunship),
+            3 => Some(ShipClass::TorpedoBoat),
+            4 => Some(ShipClass::Sniper),
+            5 => Some(ShipClass::DroneCommander),
+            _ => None,
+        }
+    }
+
+    pub fn to_request(self) -> u8 {
+        match self {
+            ShipClass::Interceptor => 1,
+            ShipClass::Gunship => 2,
+            ShipClass::TorpedoBoat => 3,
+            ShipClass::Sniper => 4,
+            ShipClass::DroneCommander => 5,
+        }
+    }
+}
+
+/// State of a single turret mount on a ship.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TurretState {
+    /// Current aim angle in world-space radians.
+    pub aim_angle: f32,
+    /// Cooldown remaining before next shot.
+    pub cooldown: f32,
+}
+
+/// Auto-turrets on a ship. Empty for classes without turrets.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Turrets {
+    pub mounts: Vec<TurretState>,
+}
+
+/// Visual kind of a projectile (for client rendering differentiation).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Copy, Default)]
+pub enum ProjectileKind {
+    #[default]
+    Autocannon,
+    HeavyCannon,
+    Turret,
+    Railgun,
+}
+
 /// Marker for asteroid entities. Stores the radius for rendering/collision.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Asteroid {
@@ -99,6 +159,50 @@ pub struct Mine {
     pub arm_timer: f32,
 }
 
+/// Homing torpedo. Steers toward nearest enemy, can be shot down.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Torpedo {
+    pub damage: f32,
+    pub owner: PeerId,
+    pub owner_team: Team,
+    pub lifetime: f32,
+}
+
+/// Cloak state for Sniper ships.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Cloak {
+    pub active: bool,
+    /// Remaining cloak duration when active.
+    pub duration: f32,
+    /// Cooldown remaining before cloak can be activated again.
+    pub cooldown: f32,
+}
+
+/// Railgun charge state for Sniper ships.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct RailgunCharge {
+    /// Charge progress: 0.0 (empty) to 1.0 (fully charged).
+    pub charge: f32,
+}
+
+/// Drone variant: laser (orbiting mini ship) or kamikaze (tracking mine).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Copy)]
+pub enum DroneKind {
+    /// Orbits near commander, shoots short-range laser at enemies.
+    Laser,
+    /// Tracks nearest enemy and detonates on contact.
+    Kamikaze,
+}
+
+/// Attack drone entity. Small AI-controlled unit belonging to a Drone Commander.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Drone {
+    pub owner: PeerId,
+    pub owner_team: Team,
+    pub health: f32,
+    pub kind: DroneKind,
+}
+
 /// A cooldown timer that ticks toward zero.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Cooldown {
@@ -137,6 +241,8 @@ pub struct ShipInput {
     pub drop_mine: bool,
     /// Aim direction in radians (angle from ship to cursor in world space).
     pub aim_angle: f32,
+    /// Request to switch ship class: 0=none, 1=Interceptor, 2=Gunship, 3=TorpedoBoat.
+    pub class_request: u8,
 }
 
 impl MapEntities for ShipInput {
@@ -167,5 +273,12 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<FireCooldown>();
         app.register_component::<MineCooldown>();
         app.register_component::<NebulaSeed>();
+        app.register_component::<ShipClass>();
+        app.register_component::<Turrets>();
+        app.register_component::<ProjectileKind>();
+        app.register_component::<Torpedo>();
+        app.register_component::<Cloak>();
+        app.register_component::<RailgunCharge>();
+        app.register_component::<Drone>();
     }
 }

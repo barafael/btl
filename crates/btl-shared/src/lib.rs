@@ -12,7 +12,8 @@ use std::ops::DerefMut;
 
 use btl_protocol::*;
 pub use btl_protocol::{
-    Ammo, Asteroid, FireCooldown, Fuel, Health, Mine, MineCooldown, NebulaSeed, Projectile,
+    Ammo, Asteroid, Cloak, Drone, DroneKind, FireCooldown, Fuel, Health, Mine, MineCooldown,
+    NebulaSeed, Projectile, ProjectileKind, RailgunCharge, ShipClass, Torpedo, TurretState, Turrets,
 };
 
 // --- Ship constants ---
@@ -74,6 +75,167 @@ pub const MINE_COOLDOWN: f32 = 2.0;
 pub const MINE_MAX_ACTIVE: usize = 5;
 /// Backward velocity offset when dropping (subtracted from ship velocity)
 pub const MINE_DROP_SPEED: f32 = 30.0;
+
+// --- Gunship constants ---
+
+pub const GUNSHIP_RADIUS: f32 = 22.0;
+pub const GUNSHIP_MASS: f32 = 18.0;
+pub const GUNSHIP_MAX_HEALTH: f32 = 150.0;
+pub const GUNSHIP_THRUST: f32 = 150.0;
+pub const GUNSHIP_AFTERBURNER_THRUST: f32 = 350.0;
+pub const GUNSHIP_STRAFE_THRUST: f32 = 80.0;
+pub const GUNSHIP_MAX_AMMO: f32 = 30.0;
+pub const GUNSHIP_AMMO_REGEN: f32 = 1.0;
+
+// --- Heavy cannon (Gunship primary, player-aimed) ---
+
+pub const HEAVY_CANNON_COOLDOWN: f32 = 0.667; // ~1.5 rounds/s
+pub const HEAVY_CANNON_SPEED: f32 = 600.0;
+pub const HEAVY_CANNON_DAMAGE: f32 = 35.0;
+pub const HEAVY_CANNON_LIFETIME: f32 = 2.5;
+pub const HEAVY_CANNON_AMMO_COST: f32 = 3.0;
+pub const HEAVY_PROJECTILE_RADIUS: f32 = 5.0;
+pub const HEAVY_MUZZLE_OFFSET: f32 = GUNSHIP_RADIUS + HEAVY_PROJECTILE_RADIUS + 2.0;
+
+// --- Auto-turret (Gunship secondary, AI-controlled) ---
+
+pub const TURRET_COUNT: usize = 3;
+pub const TURRET_COOLDOWN: f32 = 0.333; // ~3 rounds/s
+pub const TURRET_SPEED: f32 = 700.0;
+pub const TURRET_DAMAGE: f32 = 5.0;
+pub const TURRET_LIFETIME: f32 = 1.0;
+pub const TURRET_RANGE: f32 = 700.0;
+/// Max turret rotation speed (radians/sec)
+pub const TURRET_SLEW_RATE: f32 = 4.0;
+/// Angle tolerance for firing (radians)
+pub const TURRET_FIRE_TOLERANCE: f32 = 0.15;
+pub const TURRET_PROJECTILE_RADIUS: f32 = 2.0;
+
+/// Turret mount offsets in local ship space (Y+ = forward).
+pub const TURRET_MOUNTS: [Vec2; 3] = [
+    Vec2::new(0.0, GUNSHIP_RADIUS * 0.6),
+    Vec2::new(-GUNSHIP_RADIUS * 0.7, -GUNSHIP_RADIUS * 0.4),
+    Vec2::new(GUNSHIP_RADIUS * 0.7, -GUNSHIP_RADIUS * 0.4),
+];
+
+// --- Torpedo Boat constants ---
+
+pub const TBOAT_RADIUS: f32 = 18.0;
+pub const TBOAT_MASS: f32 = 12.0;
+pub const TBOAT_MAX_HEALTH: f32 = 110.0;
+pub const TBOAT_THRUST: f32 = 180.0;
+pub const TBOAT_AFTERBURNER_THRUST: f32 = 450.0;
+pub const TBOAT_STRAFE_THRUST: f32 = 100.0;
+pub const TBOAT_MAX_AMMO: f32 = 80.0;
+pub const TBOAT_AMMO_REGEN: f32 = 3.0;
+
+// --- Laser (Torpedo Boat primary, continuous beam) ---
+
+pub const LASER_RANGE: f32 = 500.0;
+pub const LASER_DPS: f32 = 20.0;
+/// Ammo consumed per second while laser is firing
+pub const LASER_AMMO_COST: f32 = 5.0;
+
+// --- Torpedo (Torpedo Boat secondary, homing) ---
+
+pub const TORPEDO_SPEED: f32 = 110.0;
+pub const TORPEDO_DAMAGE: f32 = 70.0;
+pub const TORPEDO_LIFETIME: f32 = 20.0;
+/// Max homing turn rate in radians/sec
+pub const TORPEDO_TURN_RATE: f32 = 0.8;
+pub const TORPEDO_COOLDOWN: f32 = 3.0;
+pub const TORPEDO_MAX_ACTIVE: usize = 3;
+pub const TORPEDO_RADIUS: f32 = 4.0;
+pub const TORPEDO_MUZZLE_OFFSET: f32 = TBOAT_RADIUS + TORPEDO_RADIUS + 2.0;
+
+// --- Sniper constants ---
+
+pub const SNIPER_RADIUS: f32 = 15.0;
+pub const SNIPER_MASS: f32 = 8.0;
+pub const SNIPER_MAX_HEALTH: f32 = 70.0;
+pub const SNIPER_THRUST: f32 = 220.0;
+pub const SNIPER_AFTERBURNER_THRUST: f32 = 550.0;
+pub const SNIPER_STRAFE_THRUST: f32 = 140.0;
+pub const SNIPER_MAX_AMMO: f32 = 50.0;
+pub const SNIPER_AMMO_REGEN: f32 = 1.5;
+
+// --- Railgun (Sniper primary, charge-up fast projectile) ---
+
+/// Time to fully charge the railgun (seconds)
+pub const RAILGUN_CHARGE_TIME: f32 = 2.0;
+/// Damage at full charge
+pub const RAILGUN_DAMAGE: f32 = 120.0;
+/// Cooldown after firing
+pub const RAILGUN_COOLDOWN: f32 = 5.0;
+/// Railgun projectile speed (very fast)
+pub const RAILGUN_SPEED: f32 = 3500.0;
+/// Railgun projectile lifetime (seconds)
+pub const RAILGUN_LIFETIME: f32 = 1.5;
+/// Railgun projectile collision radius
+pub const RAILGUN_PROJECTILE_RADIUS: f32 = 3.0;
+
+// --- Cloak (Sniper ability, replaces afterburner input) ---
+
+/// Max cloak duration (seconds)
+pub const CLOAK_DURATION: f32 = 8.0;
+/// Cooldown after cloak ends
+pub const CLOAK_COOLDOWN: f32 = 15.0;
+
+// --- Drone Commander constants ---
+
+pub const DCOMMANDER_RADIUS: f32 = 20.0;
+pub const DCOMMANDER_MASS: f32 = 15.0;
+pub const DCOMMANDER_MAX_HEALTH: f32 = 120.0;
+pub const DCOMMANDER_THRUST: f32 = 110.0;
+pub const DCOMMANDER_AFTERBURNER_THRUST: f32 = 260.0;
+pub const DCOMMANDER_STRAFE_THRUST: f32 = 60.0;
+pub const DCOMMANDER_MAX_AMMO: f32 = 40.0;
+pub const DCOMMANDER_AMMO_REGEN: f32 = 2.0;
+
+// --- Defense turrets (Drone Commander auto-targeting) ---
+
+pub const DEFENSE_TURRET_COUNT: usize = 5;
+pub const DEFENSE_TURRET_COOLDOWN: f32 = 0.5;
+pub const DEFENSE_TURRET_SPEED: f32 = 600.0;
+pub const DEFENSE_TURRET_DAMAGE: f32 = 3.0;
+pub const DEFENSE_TURRET_LIFETIME: f32 = 0.8;
+pub const DEFENSE_TURRET_RANGE: f32 = 500.0;
+pub const DEFENSE_TURRET_SLEW_RATE: f32 = 5.0;
+pub const DEFENSE_TURRET_FIRE_TOLERANCE: f32 = 0.2;
+pub const DEFENSE_TURRET_PROJECTILE_RADIUS: f32 = 2.0;
+
+/// Defense turret mount offsets in local ship space (Y+ = forward).
+pub const DEFENSE_TURRET_MOUNTS: [Vec2; 5] = [
+    Vec2::new(0.0, DCOMMANDER_RADIUS * 0.7),
+    Vec2::new(DCOMMANDER_RADIUS * 0.6, DCOMMANDER_RADIUS * 0.2),
+    Vec2::new(DCOMMANDER_RADIUS * 0.5, -DCOMMANDER_RADIUS * 0.5),
+    Vec2::new(-DCOMMANDER_RADIUS * 0.5, -DCOMMANDER_RADIUS * 0.5),
+    Vec2::new(-DCOMMANDER_RADIUS * 0.6, DCOMMANDER_RADIUS * 0.2),
+];
+
+// --- Attack drones ---
+
+pub const DRONE_LASER_COUNT: usize = 4;
+pub const DRONE_KAMIKAZE_COUNT: usize = 3;
+pub const DRONE_MAX_COUNT: usize = DRONE_LASER_COUNT + DRONE_KAMIKAZE_COUNT;
+pub const DRONE_RADIUS: f32 = 6.0;
+pub const DRONE_SPEED: f32 = 500.0;
+pub const DRONE_AGGRO_RANGE: f32 = 800.0;
+pub const DRONE_ORBIT_RADIUS: f32 = 80.0;
+pub const DRONE_RESPAWN_TIME: f32 = 8.0;
+// Laser drone stats
+pub const DRONE_LASER_HEALTH: f32 = 25.0;
+pub const DRONE_LASER_RANGE: f32 = 350.0;
+pub const DRONE_LASER_DPS: f32 = 6.0;
+// Kamikaze drone stats
+pub const DRONE_KAMIKAZE_HEALTH: f32 = 15.0;
+pub const DRONE_KAMIKAZE_DAMAGE: f32 = 40.0;
+pub const DRONE_KAMIKAZE_SPEED: f32 = 600.0;
+
+// --- Anti-drone pulse ---
+
+pub const PULSE_RADIUS: f32 = 400.0;
+pub const PULSE_COOLDOWN: f32 = 20.0;
 
 // --- Map constants ---
 
@@ -198,6 +360,20 @@ impl Plugin for SharedPlugin {
         app.register_component::<Mine>();
         // Nebula seed: static, no prediction needed
         app.register_component::<NebulaSeed>();
+        // Ship class and turrets
+        app.register_component::<ShipClass>().add_prediction();
+        app.register_component::<Turrets>()
+            .add_prediction()
+            .add_should_rollback(|_: &Turrets, _: &Turrets| false);
+        app.register_component::<ProjectileKind>();
+        app.register_component::<Torpedo>();
+        app.register_component::<Cloak>()
+            .add_prediction()
+            .add_should_rollback(|_: &Cloak, _: &Cloak| false);
+        app.register_component::<RailgunCharge>()
+            .add_prediction()
+            .add_should_rollback(|_: &RailgunCharge, _: &RailgunCharge| false);
+        app.register_component::<Drone>();
 
         // Register Avian physics components for prediction/interpolation/rollback
         // (requires lightyear_avian2d for Diffable trait impls)
@@ -261,6 +437,8 @@ impl Plugin for SharedPlugin {
                 update_projectile_lifetime,
                 check_projectile_asteroid_collisions,
                 update_mine_lifetime,
+                update_torpedo_lifetime,
+                update_drone_positions,
                 enforce_map_boundary,
             ),
         );
@@ -279,6 +457,7 @@ pub const SHIP_MASS: f32 = 10.0;
 pub struct ShipBundle {
     pub player_id: PlayerId,
     pub team: Team,
+    pub ship_class: ShipClass,
     pub rigid_body: RigidBody,
     pub collider: Collider,
     pub restitution: Restitution,
@@ -295,19 +474,78 @@ pub struct ShipBundle {
     pub ammo: Ammo,
     pub fire_cooldown: FireCooldown,
     pub mine_cooldown: MineCooldown,
+    pub turrets: Turrets,
+    pub cloak: Cloak,
+    pub railgun_charge: RailgunCharge,
 }
 
 impl ShipBundle {
-    pub fn new(player_id: lightyear::prelude::PeerId, team: Team, spawn_pos: Vec2) -> Self {
-        // Angular inertia for a solid circle: I = 0.5 * m * r^2
-        let angular_inertia = 0.5 * SHIP_MASS * SHIP_RADIUS * SHIP_RADIUS;
+    pub fn new(
+        player_id: lightyear::prelude::PeerId,
+        team: Team,
+        class: ShipClass,
+        spawn_pos: Vec2,
+    ) -> Self {
+        let (radius, mass, max_health, max_ammo, turrets) = match class {
+            ShipClass::Interceptor => (
+                SHIP_RADIUS,
+                SHIP_MASS,
+                SHIP_MAX_HEALTH,
+                SHIP_MAX_AMMO,
+                Turrets::default(),
+            ),
+            ShipClass::Gunship => (
+                GUNSHIP_RADIUS,
+                GUNSHIP_MASS,
+                GUNSHIP_MAX_HEALTH,
+                GUNSHIP_MAX_AMMO,
+                Turrets {
+                    mounts: (0..TURRET_COUNT)
+                        .map(|_| TurretState {
+                            aim_angle: 0.0,
+                            cooldown: 0.0,
+                        })
+                        .collect(),
+                },
+            ),
+            ShipClass::TorpedoBoat => (
+                TBOAT_RADIUS,
+                TBOAT_MASS,
+                TBOAT_MAX_HEALTH,
+                TBOAT_MAX_AMMO,
+                Turrets::default(),
+            ),
+            ShipClass::Sniper => (
+                SNIPER_RADIUS,
+                SNIPER_MASS,
+                SNIPER_MAX_HEALTH,
+                SNIPER_MAX_AMMO,
+                Turrets::default(),
+            ),
+            ShipClass::DroneCommander => (
+                DCOMMANDER_RADIUS,
+                DCOMMANDER_MASS,
+                DCOMMANDER_MAX_HEALTH,
+                DCOMMANDER_MAX_AMMO,
+                Turrets {
+                    mounts: (0..DEFENSE_TURRET_COUNT)
+                        .map(|_| TurretState {
+                            aim_angle: 0.0,
+                            cooldown: 0.0,
+                        })
+                        .collect(),
+                },
+            ),
+        };
+        let angular_inertia = 0.5 * mass * radius * radius;
         Self {
             player_id: PlayerId(player_id),
             team,
+            ship_class: class,
             rigid_body: RigidBody::Dynamic,
-            collider: Collider::circle(SHIP_RADIUS),
+            collider: Collider::circle(radius),
             restitution: Restitution::new(0.8),
-            mass: Mass(SHIP_MASS),
+            mass: Mass(mass),
             angular_inertia: AngularInertia(angular_inertia),
             position: Position(spawn_pos),
             rotation: Rotation::default(),
@@ -315,11 +553,18 @@ impl ShipBundle {
             angular_velocity: AngularVelocity::default(),
             linear_damping: LinearDamping(0.0),
             angular_damping: AngularDamping(0.0),
-            health: Health::new(SHIP_MAX_HEALTH),
+            health: Health::new(max_health),
             fuel: Fuel::new(SHIP_MAX_FUEL),
-            ammo: Ammo::new(SHIP_MAX_AMMO),
+            ammo: Ammo::new(max_ammo),
             fire_cooldown: FireCooldown::default(),
             mine_cooldown: MineCooldown::default(),
+            turrets,
+            cloak: Cloak {
+                active: false,
+                duration: CLOAK_DURATION,
+                cooldown: 0.0,
+            },
+            railgun_charge: RailgunCharge::default(),
         }
     }
 }
@@ -331,15 +576,41 @@ fn apply_ship_input(
         &ActionState<ShipInput>,
         &Rotation,
         &Fuel,
+        &ShipClass,
         &mut LinearVelocity,
         &mut AngularVelocity,
     )>,
 ) {
-    for (input, rotation, fuel, mut lin_vel, mut ang_vel) in query.iter_mut() {
+    for (input, rotation, fuel, class, mut lin_vel, mut ang_vel) in query.iter_mut() {
         let input = &input.0;
         let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
         let forward = *rotation * Vec2::Y;
         let right = *rotation * Vec2::X;
+
+        // Class-specific stats
+        let (base_thrust, ab_thrust, strafe_thrust) = match class {
+            ShipClass::Interceptor => (SHIP_THRUST, SHIP_AFTERBURNER_THRUST, SHIP_STRAFE_THRUST),
+            ShipClass::Gunship => (
+                GUNSHIP_THRUST,
+                GUNSHIP_AFTERBURNER_THRUST,
+                GUNSHIP_STRAFE_THRUST,
+            ),
+            ShipClass::TorpedoBoat => (
+                TBOAT_THRUST,
+                TBOAT_AFTERBURNER_THRUST,
+                TBOAT_STRAFE_THRUST,
+            ),
+            ShipClass::Sniper => (
+                SNIPER_THRUST,
+                SNIPER_AFTERBURNER_THRUST,
+                SNIPER_STRAFE_THRUST,
+            ),
+            ShipClass::DroneCommander => (
+                DCOMMANDER_THRUST,
+                DCOMMANDER_AFTERBURNER_THRUST,
+                DCOMMANDER_STRAFE_THRUST,
+            ),
+        };
 
         // Clamp continuous inputs to valid ranges
         let fwd = input.thrust_forward.clamp(0.0, 1.0);
@@ -348,21 +619,22 @@ fn apply_ship_input(
         let strf = input.strafe.clamp(-1.0, 1.0);
         let stab = input.stabilize.clamp(0.0, 1.0);
 
-        // Afterburner only works with fuel
-        let afterburner_active = input.afterburner && fuel.current > 0.0;
+        // Afterburner only works with fuel (Sniper repurposes this input for cloak)
+        let afterburner_active =
+            input.afterburner && *class != ShipClass::Sniper && fuel.current > 0.0;
 
         // Thrust (continuous throttle)
         let thrust = if afterburner_active {
-            SHIP_AFTERBURNER_THRUST
+            ab_thrust
         } else {
-            SHIP_THRUST
+            base_thrust
         };
 
         lin_vel.0 += forward * thrust * fwd * dt;
         lin_vel.0 -= forward * thrust * 0.5 * bwd * dt;
 
         // Strafe (continuous, positive = left, negative = right)
-        lin_vel.0 -= right * SHIP_STRAFE_THRUST * strf * dt;
+        lin_vel.0 -= right * strafe_thrust * strf * dt;
 
         // Rotation: continuous input sets desired turn rate as fraction of max
         let has_rotation_input = rot.abs() > 0.01;
@@ -459,10 +731,13 @@ fn update_mine_lifetime(mut commands: Commands, mut query: Query<(Entity, &mut M
 }
 
 /// Consume fuel while afterburner is active, regenerate when inactive.
-fn update_fuel(mut query: Query<(&ActionState<ShipInput>, &mut Fuel)>) {
+/// Sniper uses afterburner input for cloak toggle — no fuel burn.
+fn update_fuel(mut query: Query<(&ActionState<ShipInput>, &ShipClass, &mut Fuel)>) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
-    for (input, mut fuel) in query.iter_mut() {
-        if input.0.afterburner && fuel.current > 0.0 {
+    for (input, class, mut fuel) in query.iter_mut() {
+        // Sniper repurposes afterburner for cloak — skip fuel burn
+        let burning = input.0.afterburner && *class != ShipClass::Sniper && fuel.current > 0.0;
+        if burning {
             fuel.current = (fuel.current - FUEL_BURN_RATE * dt).max(0.0);
         } else if fuel.current < fuel.max {
             fuel.current = (fuel.current + FUEL_REGEN_RATE * dt).min(fuel.max);
@@ -470,12 +745,19 @@ fn update_fuel(mut query: Query<(&ActionState<ShipInput>, &mut Fuel)>) {
     }
 }
 
-/// Passive ammo regeneration.
-fn update_ammo(mut query: Query<&mut Ammo>) {
+/// Passive ammo regeneration (rate depends on ship class).
+fn update_ammo(mut query: Query<(&ShipClass, &mut Ammo)>) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
-    for mut ammo in query.iter_mut() {
+    for (class, mut ammo) in query.iter_mut() {
+        let regen = match class {
+            ShipClass::Interceptor => AMMO_REGEN_RATE,
+            ShipClass::Gunship => GUNSHIP_AMMO_REGEN,
+            ShipClass::TorpedoBoat => TBOAT_AMMO_REGEN,
+            ShipClass::Sniper => SNIPER_AMMO_REGEN,
+            ShipClass::DroneCommander => DCOMMANDER_AMMO_REGEN,
+        };
         if ammo.current < ammo.max {
-            ammo.current = (ammo.current + AMMO_REGEN_RATE * dt).min(ammo.max);
+            ammo.current = (ammo.current + regen * dt).min(ammo.max);
         }
     }
 }
@@ -576,23 +858,245 @@ fn sync_position_to_transform(mut query: Query<(&Position, &mut Transform), With
 /// Uses simple circle-circle test (no physics engine for projectiles).
 pub fn check_projectile_hits(
     mut commands: Commands,
-    projectiles: Query<(Entity, &Projectile, &Position)>,
-    mut ships: Query<(Entity, &Position, &Team, &mut Health)>,
+    projectiles: Query<(Entity, &Projectile, &Position, Option<&ProjectileKind>)>,
+    mut ships: Query<(Entity, &Position, &Team, &ShipClass, &mut Health)>,
 ) {
-    let hit_dist = PROJECTILE_RADIUS + SHIP_RADIUS;
-    let hit_dist_sq = hit_dist * hit_dist;
+    for (proj_entity, proj, proj_pos, proj_kind) in projectiles.iter() {
+        let proj_radius = match proj_kind.copied().unwrap_or_default() {
+            ProjectileKind::Autocannon => PROJECTILE_RADIUS,
+            ProjectileKind::HeavyCannon => HEAVY_PROJECTILE_RADIUS,
+            ProjectileKind::Turret => TURRET_PROJECTILE_RADIUS,
+            ProjectileKind::Railgun => RAILGUN_PROJECTILE_RADIUS,
+        };
 
-    for (proj_entity, proj, proj_pos) in projectiles.iter() {
-        for (_ship_entity, ship_pos, ship_team, mut health) in ships.iter_mut() {
-            // No friendly fire — skip same team
+        for (_ship_entity, ship_pos, ship_team, ship_class, mut health) in ships.iter_mut() {
             if *ship_team == proj.owner_team {
                 continue;
             }
 
+            let ship_radius = match ship_class {
+                ShipClass::Interceptor => SHIP_RADIUS,
+                ShipClass::Gunship => GUNSHIP_RADIUS,
+                ShipClass::TorpedoBoat => TBOAT_RADIUS,
+                ShipClass::Sniper => SNIPER_RADIUS,
+                ShipClass::DroneCommander => DCOMMANDER_RADIUS,
+            };
+            let hit_dist = proj_radius + ship_radius;
             let delta = proj_pos.0 - ship_pos.0;
-            if delta.length_squared() < hit_dist_sq {
+            if delta.length_squared() < hit_dist * hit_dist {
                 health.current = (health.current - proj.damage).max(0.0);
                 commands.entity(proj_entity).despawn();
+                break;
+            }
+        }
+    }
+}
+
+/// Despawn projectiles that hit asteroids.
+pub fn check_projectile_asteroid_hits(
+    mut commands: Commands,
+    projectiles: Query<(Entity, &Position, Option<&ProjectileKind>), With<Projectile>>,
+    asteroids: Query<(&Position, &Asteroid)>,
+) {
+    for (proj_entity, proj_pos, proj_kind) in projectiles.iter() {
+        let proj_radius = match proj_kind.copied().unwrap_or_default() {
+            ProjectileKind::Autocannon => PROJECTILE_RADIUS,
+            ProjectileKind::HeavyCannon => HEAVY_PROJECTILE_RADIUS,
+            ProjectileKind::Turret => TURRET_PROJECTILE_RADIUS,
+            ProjectileKind::Railgun => RAILGUN_PROJECTILE_RADIUS,
+        };
+        for (ast_pos, ast) in asteroids.iter() {
+            let hit_dist = proj_radius + ast.radius;
+            let delta = proj_pos.0 - ast_pos.0;
+            if delta.length_squared() < hit_dist * hit_dist {
+                commands.entity(proj_entity).despawn();
+                break;
+            }
+        }
+    }
+}
+
+/// Ray-circle intersection. Returns the distance along `dir` to the closest
+/// intersection point with the circle at `center` with given `radius`.
+/// Returns `f32::MAX` if no intersection (ray misses or circle is behind origin).
+pub fn ray_circle_intersect(origin: Vec2, dir: Vec2, center: Vec2, radius: f32) -> f32 {
+    let oc = origin - center;
+    let b = oc.dot(dir);
+    let c = oc.dot(oc) - radius * radius;
+    let discriminant = b * b - c;
+    if discriminant < 0.0 {
+        return f32::MAX;
+    }
+    let sqrt_d = discriminant.sqrt();
+    let t1 = -b - sqrt_d;
+    let t2 = -b + sqrt_d;
+    if t1 > 0.0 {
+        t1
+    } else if t2 > 0.0 {
+        t2
+    } else {
+        f32::MAX
+    }
+}
+
+/// Tick torpedo lifetime, move torpedoes, and despawn expired ones.
+pub fn update_torpedo_lifetime(
+    mut commands: Commands,
+    mut query: Query<(Entity, &mut Torpedo, &mut Position, &LinearVelocity)>,
+) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for (entity, mut torp, mut pos, vel) in query.iter_mut() {
+        pos.0 += vel.0 * dt;
+        torp.lifetime -= dt;
+        if torp.lifetime <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+/// Projectiles can shoot down torpedoes.
+pub fn check_torpedo_shootdown(
+    mut commands: Commands,
+    projectiles: Query<(Entity, &Projectile, &Position)>,
+    torpedoes: Query<(Entity, &Torpedo, &Position)>,
+) {
+    for (proj_entity, proj, proj_pos) in projectiles.iter() {
+        for (torp_entity, torp, torp_pos) in torpedoes.iter() {
+            if proj.owner_team == torp.owner_team {
+                continue;
+            }
+            let hit_dist = PROJECTILE_RADIUS + TORPEDO_RADIUS;
+            if (proj_pos.0 - torp_pos.0).length_squared() < hit_dist * hit_dist {
+                commands.entity(proj_entity).despawn();
+                commands.entity(torp_entity).despawn();
+                break;
+            }
+        }
+    }
+}
+
+/// Move drones by their velocity (no physics engine).
+fn update_drone_positions(mut query: Query<(&mut Position, &LinearVelocity), With<Drone>>) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for (mut pos, vel) in query.iter_mut() {
+        pos.0 += vel.0 * dt;
+    }
+}
+
+/// Projectiles can hit drones. No team filtering — any projectile hits any drone (friendly fire).
+pub fn check_projectile_drone_hits(
+    mut commands: Commands,
+    projectiles: Query<(Entity, &Projectile, &Position)>,
+    mut drones: Query<(Entity, &mut Drone, &Position)>,
+) {
+    for (proj_entity, proj, proj_pos) in projectiles.iter() {
+        for (drone_entity, mut drone, drone_pos) in drones.iter_mut() {
+            let hit_dist = PROJECTILE_RADIUS + DRONE_RADIUS;
+            if (proj_pos.0 - drone_pos.0).length_squared() < hit_dist * hit_dist {
+                drone.health -= proj.damage;
+                commands.entity(proj_entity).despawn();
+                if drone.health <= 0.0 {
+                    commands.entity(drone_entity).despawn();
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Drones deal contact DPS to enemy ships when overlapping.
+/// Laser drones apply continuous DPS to nearest enemy within range.
+pub fn drone_laser_damage(
+    drones: Query<(&Drone, &Position)>,
+    mut ships: Query<(Entity, &Position, &Team, &mut Health)>,
+) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let range_sq = DRONE_LASER_RANGE * DRONE_LASER_RANGE;
+
+    // Collect (target_entity, damage) to avoid borrow conflicts
+    let mut hits: Vec<(Entity, f32)> = Vec::new();
+
+    for (drone, drone_pos) in drones.iter() {
+        if drone.kind != DroneKind::Laser {
+            continue;
+        }
+        let mut best_dist_sq = range_sq;
+        let mut best_target = None;
+        for (entity, ship_pos, ship_team, _) in ships.iter() {
+            if *ship_team == drone.owner_team {
+                continue;
+            }
+            let dist_sq = (drone_pos.0 - ship_pos.0).length_squared();
+            if dist_sq < best_dist_sq {
+                best_dist_sq = dist_sq;
+                best_target = Some(entity);
+            }
+        }
+        if let Some(target) = best_target {
+            hits.push((target, DRONE_LASER_DPS * dt));
+        }
+    }
+
+    for (entity, damage) in hits {
+        if let Ok((_, _, _, mut health)) = ships.get_mut(entity) {
+            health.current = (health.current - damage).max(0.0);
+        }
+    }
+}
+
+/// Kamikaze drones explode on contact with enemy ships — burst damage + self-destruct.
+pub fn drone_kamikaze_impact(
+    mut commands: Commands,
+    drones: Query<(Entity, &Drone, &Position)>,
+    mut ships: Query<(&Position, &Team, &ShipClass, &mut Health)>,
+) {
+    for (drone_entity, drone, drone_pos) in drones.iter() {
+        if drone.kind != DroneKind::Kamikaze {
+            continue;
+        }
+        for (ship_pos, ship_team, ship_class, mut health) in ships.iter_mut() {
+            if *ship_team == drone.owner_team {
+                continue;
+            }
+            let ship_radius = match ship_class {
+                ShipClass::Interceptor => SHIP_RADIUS,
+                ShipClass::Gunship => GUNSHIP_RADIUS,
+                ShipClass::TorpedoBoat => TBOAT_RADIUS,
+                ShipClass::Sniper => SNIPER_RADIUS,
+                ShipClass::DroneCommander => DCOMMANDER_RADIUS,
+            };
+            let hit_dist = DRONE_RADIUS + ship_radius;
+            if (drone_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
+                health.current = (health.current - DRONE_KAMIKAZE_DAMAGE).max(0.0);
+                commands.entity(drone_entity).despawn();
+                break;
+            }
+        }
+    }
+}
+
+/// Check torpedo-ship overlaps. Torpedoes deal damage and despawn on hit.
+pub fn check_torpedo_hits(
+    mut commands: Commands,
+    torpedoes: Query<(Entity, &Torpedo, &Position)>,
+    mut ships: Query<(&Position, &Team, &ShipClass, &mut Health)>,
+) {
+    for (torp_entity, torp, torp_pos) in torpedoes.iter() {
+        for (ship_pos, ship_team, ship_class, mut health) in ships.iter_mut() {
+            if *ship_team == torp.owner_team {
+                continue;
+            }
+            let ship_radius = match ship_class {
+                ShipClass::Interceptor => SHIP_RADIUS,
+                ShipClass::Gunship => GUNSHIP_RADIUS,
+                ShipClass::TorpedoBoat => TBOAT_RADIUS,
+                ShipClass::Sniper => SNIPER_RADIUS,
+                ShipClass::DroneCommander => DCOMMANDER_RADIUS,
+            };
+            let hit_dist = TORPEDO_RADIUS + ship_radius;
+            if (torp_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
+                health.current = (health.current - torp.damage).max(0.0);
+                commands.entity(torp_entity).despawn();
                 break;
             }
         }
