@@ -1864,14 +1864,27 @@ fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
     let decel = SHIP_STABILIZE_DECEL;
 
     // Curvature-based max speed at each point (with safety margin)
-    let mut profile: Vec<f32> = curvatures
+    // Smooth curvatures forward: at each point, use the max curvature
+    // within a look-ahead window. This makes the ship anticipate curves.
+    let smooth_window = 15; // ~12% of 128-sample path
+    let mut max_curvature: Vec<f32> = vec![0.0; n];
+    for i in 0..n {
+        let end = (i + smooth_window).min(n);
+        let mut peak = curvatures[i];
+        for j in i..end {
+            peak = peak.max(curvatures[j]);
+        }
+        max_curvature[i] = peak;
+    }
+
+    let mut profile: Vec<f32> = max_curvature
         .iter()
         .map(|&k| {
             if k > 0.001 {
-                // v_safe = ω_max / κ, with 0.45 margin to allow correction room
-                (SHIP_MAX_ANGULAR_SPEED * 0.45 / k).min(SHIP_MAX_SPEED * 0.8)
+                // v_safe = ω_max / κ, with 0.35 safety margin
+                (SHIP_MAX_ANGULAR_SPEED * 0.35 / k).min(SHIP_MAX_SPEED * 0.7)
             } else {
-                SHIP_MAX_SPEED * 0.7
+                SHIP_MAX_SPEED * 0.65
             }
         })
         .collect();
@@ -1974,8 +1987,8 @@ fn path_lerp(path: &[Vec2], idx: f32) -> Vec2 {
 /// Find the closest point on the path to `pos`, starting search from `start_idx`.
 /// Returns the fractional index.
 fn find_closest_on_path(path: &[Vec2], pos: Vec2, start_idx: f32) -> f32 {
-    let start = (start_idx as usize).saturating_sub(2);
-    let end = (start + 20).min(path.len() - 1); // only search nearby
+    let start = (start_idx as usize).saturating_sub(5);
+    let end = (start + 40).min(path.len() - 1); // search wider window
     let mut best_idx = start_idx;
     let mut best_dist = f32::MAX;
 
@@ -2281,15 +2294,13 @@ fn route_follow(
     let cte = cross_track_error(&following.path, ship_pos, following.progress);
 
     // 3. Update CTE integral with anti-windup
-    //    Reset on sign change, clamp accumulator
     let prev_sign = following.cte_integral.signum();
     let cte_sign = cte.signum();
     if prev_sign != 0.0 && cte_sign != 0.0 && prev_sign != cte_sign {
-        following.cte_integral = 0.0; // zero-crossing reset
+        following.cte_integral = 0.0;
     }
-    following.cte_integral = (following.cte_integral + cte * dt).clamp(-200.0, 200.0);
+    following.cte_integral = (following.cte_integral + cte * dt).clamp(-150.0, 150.0);
 
-    // Snapshot mutable fields, then take immutable refs
     let progress = following.progress;
     let cte_integral = following.cte_integral;
     let path = &following.path;
@@ -2298,68 +2309,54 @@ fn route_follow(
 
     let tangent_here = path_tangent(path, progress);
 
-    // 4. ADAPTIVE LOOK-AHEAD using arc lengths
-    //    Shorter look-ahead in tight curves, longer on straights
+    // 4. PURE PURSUIT: look ahead along the path, aim directly at that point
     let curvature_here = curvatures[progress as usize];
     let look_ahead_base = (speed * LOOK_AHEAD_TIME).clamp(LOOK_AHEAD_MIN, LOOK_AHEAD_MAX);
-    // Reduce look-ahead proportionally to curvature (tighter curve → look closer)
     let curvature_factor = (1.0 / (1.0 + curvature_here * 200.0)).clamp(0.4, 1.0);
     let look_ahead_dist = look_ahead_base * curvature_factor;
     let look_ahead_idx = advance_by_arc_length(arc_lengths, progress, look_ahead_dist).min(max_idx);
     let look_ahead_pos = path_lerp(path, look_ahead_idx);
-    let tangent_ahead = path_tangent(path, look_ahead_idx);
 
-    // 5. Blended desired heading: tangent (on-path) vs pursuit (off-path)
-    let pursuit_dir = {
-        let d = look_ahead_pos - ship_pos;
-        let len = d.length();
-        if len > 0.1 { d / len } else { tangent_ahead }
+    // 5. Desired heading: always aim at the look-ahead point (pure pursuit)
+    //    This naturally corrects cross-track error without needing blend tuning.
+    let to_target = look_ahead_pos - ship_pos;
+    let desired_angle = if to_target.length_squared() > 1.0 {
+        to_target.y.atan2(to_target.x)
+    } else {
+        tangent_here.y.atan2(tangent_here.x)
     };
-    let blend = (cte.abs() / 80.0).clamp(0.0, 1.0);
-    let desired_dir =
-        (tangent_ahead * (1.0 - blend) + pursuit_dir * blend).normalize_or(tangent_ahead);
-    let desired_angle = desired_dir.y.atan2(desired_dir.x);
 
-    // 6. Heading error
-    let (_, _, ship_rot_z) = ship_tf.rotation.to_euler(EulerRot::XYZ);
-    let ship_heading = ship_rot_z + std::f32::consts::FRAC_PI_2;
+    // 6. Heading error — derive from transform forward vector directly (robust)
+    let fwd_3d = ship_tf.rotation * Vec3::Y; // ship mesh Y+ = forward
+    let ship_heading = fwd_3d.y.atan2(fwd_3d.x);
     let heading_err = wrap_angle(desired_angle - ship_heading);
 
-    // 7. ROTATION CONTROL with curvature feedforward
-    //    ω_feedforward = speed × κ_ahead anticipates turns
-    //    ω_feedback = phase-plane optimal switching for residual heading error
+    // 7. ROTATION CONTROL: bang-bang with damping
     let alpha = SHIP_ANGULAR_DECEL;
-    let kappa_ahead = curvatures[(look_ahead_idx as usize).min(curvatures.len() - 1)];
-    // Signed curvature: use cross product of consecutive tangents to get turn direction
-    let tangent_mid = path_tangent(path, (progress + look_ahead_idx) * 0.5);
-    let cross = tangent_here.x * tangent_mid.y - tangent_here.y * tangent_mid.x;
-    let omega_ff = speed * kappa_ahead * cross.signum();
-
     let omega_fb = heading_err.signum() * (2.0 * alpha * heading_err.abs()).sqrt();
-    let omega_desired =
-        (omega_ff + omega_fb).clamp(-SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_ANGULAR_SPEED);
+    let omega_desired = omega_fb.clamp(-SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_ANGULAR_SPEED);
     let rotate = (omega_desired / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
 
-    // 8. STRAFE PID CONTROL
-    let path_normal = Vec2::new(-tangent_here.y, tangent_here.x); // left-of-path
-    let ship_right = Vec2::new(ship_rot_z.cos(), ship_rot_z.sin()); // ship's local +X
+    // 8. STRAFE: correct lateral drift when roughly aligned with path
+    let path_normal = Vec2::new(-tangent_here.y, tangent_here.x);
+    let ship_right_3d = ship_tf.rotation * Vec3::X;
+    let ship_right = Vec2::new(ship_right_3d.x, ship_right_3d.y);
     let normal_in_ship = path_normal.dot(ship_right);
 
     let lateral_vel = lin_vel.0.dot(path_normal);
     let cte_in_ship_right = cte * normal_in_ship;
     let integral_in_ship = cte_integral * normal_in_ship;
 
-    let k_p = 0.03; // proportional gain
-    let k_i = 0.005; // integral gain
-    let k_d = 0.05; // derivative (velocity damping) gain
+    let k_p = 0.04;
+    let k_i = 0.008;
+    let k_d = 0.06;
     let strafe_cmd =
         k_p * cte_in_ship_right + k_i * integral_in_ship + k_d * lateral_vel * normal_in_ship;
+    // Only strafe when heading is roughly correct (within ±45°)
     let alignment_scale = (1.0 - (heading_err.abs() / std::f32::consts::FRAC_PI_4)).clamp(0.0, 1.0);
     let strafe = (strafe_cmd * alignment_scale).clamp(-1.0, 1.0);
 
     // 9. SPEED FROM PRECOMPUTED PROFILE
-    //    The profile already accounts for curvature limits, braking distances,
-    //    and end-of-path deceleration to zero.
     let speed_profile = &following.speed_profile;
     let idx_i = (progress as usize).min(speed_profile.len().saturating_sub(2));
     let idx_frac = progress - idx_i as f32;
@@ -2367,34 +2364,35 @@ fn route_follow(
         + idx_frac
             * (speed_profile[(idx_i + 1).min(speed_profile.len() - 1)] - speed_profile[idx_i]);
 
-    // 10. VELOCITY ALIGNMENT
+    // 10. VELOCITY ALIGNMENT — how much velocity is along the path tangent
     let vel_alignment = if speed > 5.0 {
         lin_vel.0.dot(tangent_here) / speed
     } else {
         1.0
     };
 
-    // 11. CONTINUOUS THRUST AND STABILIZE
+    // 11. THRUST AND STABILIZE
     let speed_error = target_speed - speed;
-    let heading_factor = (1.0 - heading_err.abs() / std::f32::consts::FRAC_PI_2).clamp(0.0, 1.0);
-    let alignment_factor = ((vel_alignment - 0.3) / 0.7).clamp(0.0, 1.0);
+    // Only gate thrust on heading — don't double-gate with alignment
+    let heading_factor = (1.0 - heading_err.abs() / std::f32::consts::FRAC_PI_3).clamp(0.0, 1.0);
 
     let remaining = remaining_arc_length(path, progress);
     let stopping_dist = speed * speed / (2.0 * SHIP_STABILIZE_DECEL);
 
-    let thrust_forward = if speed_error > 0.0 && remaining > stopping_dist * 1.2 {
-        (speed_error / 100.0).clamp(0.0, 1.0) * heading_factor * alignment_factor
+    let thrust_forward = if speed_error > 0.0 && remaining > stopping_dist * 1.5 {
+        (speed_error / 80.0).clamp(0.0, 1.0) * heading_factor
     } else {
         0.0
     };
 
+    // Brake when too fast or velocity is misaligned with path
     let speed_excess = (speed - target_speed).max(0.0);
-    let sideslip_brake = if vel_alignment < 0.5 && speed > 20.0 {
-        (0.5 - vel_alignment) * 2.0
+    let sideslip_brake = if vel_alignment < 0.7 && speed > 15.0 {
+        (0.7 - vel_alignment) * 1.5
     } else {
         0.0
     };
-    let stabilize = ((speed_excess / 80.0) + sideslip_brake).clamp(0.0, 1.0);
+    let stabilize = ((speed_excess / 60.0) + sideslip_brake).clamp(0.0, 1.0);
 
     // Compute aim angle from mouse cursor
     let aim_angle = cursor_world_pos(&windows, &camera_query)
