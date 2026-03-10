@@ -11,7 +11,13 @@ bevy = { version = "0.18.1", default-features = false, features = [
     "bevy_log",
     "multi_threaded",
 ] }
-avian2d = "0.5.0"
+avian2d = { version = "0.5.0", default-features = false, features = [
+    "2d",
+    "f32",
+    "parry-f32",
+    "default-collider",
+    "parallel",
+] }
 lightyear = { version = "0.26.4", features = [
     "server",
     "webtransport",
