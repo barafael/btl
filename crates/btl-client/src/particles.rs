@@ -78,7 +78,11 @@ impl Plugin for ParticlePlugin {
         )));
         app.add_systems(
             Update,
-            (spawn_thruster_particles, spawn_torpedo_plume, update_particles),
+            (
+                spawn_thruster_particles,
+                spawn_torpedo_plume,
+                update_particles,
+            ),
         );
     }
 }

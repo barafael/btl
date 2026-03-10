@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
 pub mod nebula;
 pub mod rng;
 
@@ -13,7 +15,8 @@ use std::ops::DerefMut;
 use btl_protocol::*;
 pub use btl_protocol::{
     Ammo, Asteroid, Cloak, Drone, DroneKind, FireCooldown, Fuel, Health, Mine, MineCooldown,
-    NebulaSeed, Projectile, ProjectileKind, RailgunCharge, ShipClass, Torpedo, TurretState, Turrets,
+    NebulaSeed, Projectile, ProjectileKind, RailgunCharge, ShipClass, Torpedo, TurretState,
+    Turrets,
 };
 
 // --- Ship constants ---
@@ -595,11 +598,7 @@ fn apply_ship_input(
                 GUNSHIP_AFTERBURNER_THRUST,
                 GUNSHIP_STRAFE_THRUST,
             ),
-            ShipClass::TorpedoBoat => (
-                TBOAT_THRUST,
-                TBOAT_AFTERBURNER_THRUST,
-                TBOAT_STRAFE_THRUST,
-            ),
+            ShipClass::TorpedoBoat => (TBOAT_THRUST, TBOAT_AFTERBURNER_THRUST, TBOAT_STRAFE_THRUST),
             ShipClass::Sniper => (
                 SNIPER_THRUST,
                 SNIPER_AFTERBURNER_THRUST,

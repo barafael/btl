@@ -11,24 +11,20 @@ use avian2d::prelude::*;
 use btl_protocol::*;
 use btl_shared::{
     AMMO_COST, AUTOCANNON_COOLDOWN, AUTOCANNON_DAMAGE, AUTOCANNON_LIFETIME, AUTOCANNON_SPEED,
-    Asteroid, CLOAK_COOLDOWN, CLOAK_DURATION, Cloak,
-    DEFENSE_TURRET_COOLDOWN, DEFENSE_TURRET_DAMAGE, DEFENSE_TURRET_FIRE_TOLERANCE,
-    DEFENSE_TURRET_LIFETIME, DEFENSE_TURRET_MOUNTS, DEFENSE_TURRET_RANGE,
-    DEFENSE_TURRET_SLEW_RATE, DEFENSE_TURRET_SPEED, DRONE_AGGRO_RANGE,
-    DRONE_KAMIKAZE_HEALTH, DRONE_KAMIKAZE_SPEED,
-    DRONE_LASER_COUNT, DRONE_LASER_HEALTH, DRONE_LASER_RANGE,
-    DRONE_MAX_COUNT, DRONE_ORBIT_RADIUS, DRONE_RESPAWN_TIME, DRONE_SPEED, Drone,
-    HEAVY_CANNON_AMMO_COST, HEAVY_CANNON_COOLDOWN, HEAVY_CANNON_DAMAGE, HEAVY_CANNON_LIFETIME,
-    HEAVY_CANNON_SPEED, HEAVY_MUZZLE_OFFSET, LASER_AMMO_COST, LASER_DPS, LASER_RANGE,
-    MINE_ARM_TIME, MINE_COOLDOWN, MINE_DAMAGE, MINE_DROP_SPEED, MINE_LIFETIME, MINE_MAX_ACTIVE,
-    MUZZLE_OFFSET, NebulaSeed, PULSE_COOLDOWN, PULSE_RADIUS, RAILGUN_CHARGE_TIME,
-    RAILGUN_COOLDOWN, RAILGUN_DAMAGE, RailgunCharge, ShipBundle,
-    TBOAT_RADIUS,
-    TORPEDO_COOLDOWN, TORPEDO_DAMAGE, TORPEDO_LIFETIME, TORPEDO_MAX_ACTIVE, TORPEDO_MUZZLE_OFFSET,
-    TORPEDO_SPEED, TORPEDO_TURN_RATE, TURRET_COOLDOWN, TURRET_DAMAGE,
+    Asteroid, CLOAK_COOLDOWN, CLOAK_DURATION, Cloak, DEFENSE_TURRET_COOLDOWN,
+    DEFENSE_TURRET_DAMAGE, DEFENSE_TURRET_FIRE_TOLERANCE, DEFENSE_TURRET_LIFETIME,
+    DEFENSE_TURRET_MOUNTS, DEFENSE_TURRET_RANGE, DEFENSE_TURRET_SLEW_RATE, DEFENSE_TURRET_SPEED,
+    DRONE_AGGRO_RANGE, DRONE_KAMIKAZE_HEALTH, DRONE_KAMIKAZE_SPEED, DRONE_LASER_COUNT,
+    DRONE_LASER_HEALTH, DRONE_LASER_RANGE, DRONE_MAX_COUNT, DRONE_ORBIT_RADIUS, DRONE_RESPAWN_TIME,
+    DRONE_SPEED, Drone, HEAVY_CANNON_AMMO_COST, HEAVY_CANNON_COOLDOWN, HEAVY_CANNON_DAMAGE,
+    HEAVY_CANNON_LIFETIME, HEAVY_CANNON_SPEED, HEAVY_MUZZLE_OFFSET, LASER_AMMO_COST, LASER_DPS,
+    LASER_RANGE, MINE_ARM_TIME, MINE_COOLDOWN, MINE_DAMAGE, MINE_DROP_SPEED, MINE_LIFETIME,
+    MINE_MAX_ACTIVE, MUZZLE_OFFSET, NebulaSeed, PULSE_COOLDOWN, PULSE_RADIUS, RAILGUN_CHARGE_TIME,
+    RAILGUN_COOLDOWN, RAILGUN_DAMAGE, RAILGUN_LIFETIME, RAILGUN_SPEED, RailgunCharge, ShipBundle,
+    TBOAT_RADIUS, TORPEDO_COOLDOWN, TORPEDO_DAMAGE, TORPEDO_LIFETIME, TORPEDO_MAX_ACTIVE,
+    TORPEDO_MUZZLE_OFFSET, TORPEDO_SPEED, TORPEDO_TURN_RATE, TURRET_COOLDOWN, TURRET_DAMAGE,
     TURRET_FIRE_TOLERANCE, TURRET_LIFETIME, TURRET_MOUNTS, TURRET_RANGE, TURRET_SLEW_RATE,
     TURRET_SPEED, Torpedo, generate_asteroid_layout, ray_circle_intersect,
-    RAILGUN_SPEED, RAILGUN_LIFETIME,
 };
 
 /// Server-only component tracking drone squad state for Drone Commander ships.
@@ -851,8 +847,7 @@ fn server_turret_ai(
                 if diff.abs() < fire_tol && turret.cooldown <= 0.0 {
                     turret.cooldown = cd;
 
-                    let aim_dir =
-                        Vec2::new(turret.aim_angle.cos(), turret.aim_angle.sin());
+                    let aim_dir = Vec2::new(turret.aim_angle.cos(), turret.aim_angle.sin());
                     let spawn_pos = mount_world + aim_dir * 10.0;
                     let proj_vel = ship_vel.0 + aim_dir * speed;
 
@@ -881,12 +876,12 @@ fn server_init_drone_squads(
     classes: Query<&ShipClass>,
 ) {
     for entity in query.iter() {
-        if let Ok(class) = classes.get(entity) {
-            if *class == ShipClass::DroneCommander {
-                commands
-                    .entity(entity)
-                    .insert(DroneSquad { respawn_timer: 0.0 });
-            }
+        if let Ok(class) = classes.get(entity)
+            && *class == ShipClass::DroneCommander
+        {
+            commands
+                .entity(entity)
+                .insert(DroneSquad { respawn_timer: 0.0 });
         }
     }
 }
@@ -1037,8 +1032,7 @@ fn orbit_commander(
             let tangent = Vec2::new(-to_drone.y, to_drone.x).normalize();
             let radial = (DRONE_ORBIT_RADIUS - dist) * 0.05;
             let inward = to_drone / dist * radial;
-            let orbit =
-                (tangent * speed * 0.5 - inward * speed).normalize() * speed * 0.5;
+            let orbit = (tangent * speed * 0.5 - inward * speed).normalize() * speed * 0.5;
             cmd_vel + orbit
         }
     } else {

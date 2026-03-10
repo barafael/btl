@@ -17,11 +17,9 @@ use btl_protocol::*;
 use btl_shared::{
     Ammo, Asteroid, Cloak, DCOMMANDER_MASS, DCOMMANDER_RADIUS, DEFENSE_TURRET_MOUNTS,
     DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind, FrameInterpolate, GUNSHIP_MASS,
-    GUNSHIP_RADIUS, LASER_RANGE,
-    MINE_RADIUS, MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position, Projectile,
-    RailgunCharge, Rotation, SHIP_MASS, SHIP_RADIUS, SNIPER_MASS,
-    SNIPER_RADIUS, TBOAT_MASS, TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo,
-    ray_circle_intersect,
+    GUNSHIP_RADIUS, LASER_RANGE, MINE_RADIUS, MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position,
+    Projectile, RailgunCharge, Rotation, SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS,
+    TBOAT_MASS, TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo, ray_circle_intersect,
 };
 
 /// Convert the cursor position to world coordinates using the primary window and camera.
@@ -241,14 +239,14 @@ fn create_interceptor_mesh(r: f32) -> Mesh {
 /// Gunship hull mesh: wider, blockier than the Interceptor. Armored look.
 fn create_gunship_mesh(r: f32) -> Mesh {
     let verts: Vec<[f32; 3]> = vec![
-        [0.0, r * 1.2, 0.0],       // 0: nose (blunter than interceptor)
-        [r * 0.45, r * 0.5, 0.0],  // 1: right forward
-        [r * 0.55, -r * 0.1, 0.0], // 2: right mid (widest)
-        [r * 0.4, -r * 0.7, 0.0],  // 3: right rear
-        [0.0, -r * 0.85, 0.0],     // 4: tail
-        [-r * 0.4, -r * 0.7, 0.0], // 5: left rear
+        [0.0, r * 1.2, 0.0],        // 0: nose (blunter than interceptor)
+        [r * 0.45, r * 0.5, 0.0],   // 1: right forward
+        [r * 0.55, -r * 0.1, 0.0],  // 2: right mid (widest)
+        [r * 0.4, -r * 0.7, 0.0],   // 3: right rear
+        [0.0, -r * 0.85, 0.0],      // 4: tail
+        [-r * 0.4, -r * 0.7, 0.0],  // 5: left rear
         [-r * 0.55, -r * 0.1, 0.0], // 6: left mid (widest)
-        [-r * 0.45, r * 0.5, 0.0], // 7: left forward
+        [-r * 0.45, r * 0.5, 0.0],  // 7: left forward
     ];
 
     let n = verts.len() as f32;
@@ -317,16 +315,16 @@ fn create_torpedo_boat_mesh(r: f32) -> Mesh {
 /// Sniper hull mesh: slim, angular stealth profile.
 fn create_sniper_mesh(r: f32) -> Mesh {
     let verts: Vec<[f32; 3]> = vec![
-        [0.0, r * 1.5, 0.0],        // 0: sharp nose
-        [r * 0.15, r * 0.8, 0.0],   // 1: right forward (very narrow)
-        [r * 0.35, r * 0.1, 0.0],   // 2: right wing tip
-        [r * 0.2, -r * 0.5, 0.0],   // 3: right rear
-        [r * 0.1, -r * 0.9, 0.0],   // 4: right tail fin
-        [0.0, -r * 0.7, 0.0],       // 5: center tail
-        [-r * 0.1, -r * 0.9, 0.0],  // 6: left tail fin
-        [-r * 0.2, -r * 0.5, 0.0],  // 7: left rear
-        [-r * 0.35, r * 0.1, 0.0],  // 8: left wing tip
-        [-r * 0.15, r * 0.8, 0.0],  // 9: left forward
+        [0.0, r * 1.5, 0.0],       // 0: sharp nose
+        [r * 0.15, r * 0.8, 0.0],  // 1: right forward (very narrow)
+        [r * 0.35, r * 0.1, 0.0],  // 2: right wing tip
+        [r * 0.2, -r * 0.5, 0.0],  // 3: right rear
+        [r * 0.1, -r * 0.9, 0.0],  // 4: right tail fin
+        [0.0, -r * 0.7, 0.0],      // 5: center tail
+        [-r * 0.1, -r * 0.9, 0.0], // 6: left tail fin
+        [-r * 0.2, -r * 0.5, 0.0], // 7: left rear
+        [-r * 0.35, r * 0.1, 0.0], // 8: left wing tip
+        [-r * 0.15, r * 0.8, 0.0], // 9: left forward
     ];
 
     let n = verts.len() as f32;
@@ -356,16 +354,16 @@ fn create_sniper_mesh(r: f32) -> Mesh {
 /// Drone Commander hull mesh: wide, flat hexagonal carrier shape.
 fn create_drone_commander_mesh(r: f32) -> Mesh {
     let verts: Vec<[f32; 3]> = vec![
-        [0.0, r * 1.0, 0.0],         // 0: nose (blunt)
-        [r * 0.5, r * 0.6, 0.0],     // 1: right forward
-        [r * 0.65, 0.0, 0.0],        // 2: right mid (widest)
-        [r * 0.5, -r * 0.5, 0.0],    // 3: right rear
-        [r * 0.2, -r * 0.8, 0.0],    // 4: right tail
-        [0.0, -r * 0.65, 0.0],       // 5: center tail
-        [-r * 0.2, -r * 0.8, 0.0],   // 6: left tail
-        [-r * 0.5, -r * 0.5, 0.0],   // 7: left rear
-        [-r * 0.65, 0.0, 0.0],       // 8: left mid (widest)
-        [-r * 0.5, r * 0.6, 0.0],    // 9: left forward
+        [0.0, r * 1.0, 0.0],       // 0: nose (blunt)
+        [r * 0.5, r * 0.6, 0.0],   // 1: right forward
+        [r * 0.65, 0.0, 0.0],      // 2: right mid (widest)
+        [r * 0.5, -r * 0.5, 0.0],  // 3: right rear
+        [r * 0.2, -r * 0.8, 0.0],  // 4: right tail
+        [0.0, -r * 0.65, 0.0],     // 5: center tail
+        [-r * 0.2, -r * 0.8, 0.0], // 6: left tail
+        [-r * 0.5, -r * 0.5, 0.0], // 7: left rear
+        [-r * 0.65, 0.0, 0.0],     // 8: left mid (widest)
+        [-r * 0.5, r * 0.6, 0.0],  // 9: left forward
     ];
 
     let n = verts.len() as f32;
@@ -908,7 +906,10 @@ fn update_mine_visuals(
 /// Initialize rendering for replicated torpedo entities.
 fn init_torpedoes(
     mut commands: Commands,
-    query: Query<(Entity, &LinearVelocity, &Position), (With<Torpedo>, Without<TorpedoInitialized>)>,
+    query: Query<
+        (Entity, &LinearVelocity, &Position),
+        (With<Torpedo>, Without<TorpedoInitialized>),
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -1058,18 +1059,23 @@ fn render_pulse_indicator(
 
         // Show pulse radius when ready (subtle circle)
         if cooldown.remaining <= 0.0 {
-            gizmos.circle_2d(
-                ship_pos,
-                PULSE_RADIUS,
-                Color::srgba(0.5, 0.8, 0.5, 0.1),
-            );
+            gizmos.circle_2d(ship_pos, PULSE_RADIUS, Color::srgba(0.5, 0.8, 0.5, 0.1));
         }
     }
 }
 
 /// Draw laser beam from TorpedoBoat ships that are firing.
 fn render_laser_beams(
-    ships: Query<(&ShipClass, &Transform, &ActionState<ShipInput>, &Team, &Ammo), With<LocalShip>>,
+    ships: Query<
+        (
+            &ShipClass,
+            &Transform,
+            &ActionState<ShipInput>,
+            &Team,
+            &Ammo,
+        ),
+        With<LocalShip>,
+    >,
     enemies: Query<(&Transform, &Team), (With<ShipInitialized>, Without<LocalShip>)>,
     asteroids: Query<(&Transform, &Asteroid)>,
     mut gizmos: Gizmos,
@@ -1087,7 +1093,8 @@ fn render_laser_beams(
 
         // Check asteroids
         for (ast_tf, ast) in asteroids.iter() {
-            let t = ray_circle_intersect(ship_pos, aim_dir, ast_tf.translation.truncate(), ast.radius);
+            let t =
+                ray_circle_intersect(ship_pos, aim_dir, ast_tf.translation.truncate(), ast.radius);
             if t > 0.0 && t < best_t {
                 best_t = t;
             }
@@ -1114,20 +1121,29 @@ fn render_laser_beams(
         let end = ship_pos + aim_dir * best_t;
 
         // Core beam (bright thin line)
-        gizmos.line_2d(ship_pos, end, Color::LinearRgba(LinearRgba::new(2.0, 0.3, 0.3, 0.9)));
+        gizmos.line_2d(
+            ship_pos,
+            end,
+            Color::LinearRgba(LinearRgba::new(2.0, 0.3, 0.3, 0.9)),
+        );
         // Glow (wider, dimmer)
         let offset = Vec2::new(-aim_dir.y, aim_dir.x) * 1.0;
-        gizmos.line_2d(ship_pos + offset, end + offset, Color::LinearRgba(LinearRgba::new(1.0, 0.15, 0.1, 0.3)));
-        gizmos.line_2d(ship_pos - offset, end - offset, Color::LinearRgba(LinearRgba::new(1.0, 0.15, 0.1, 0.3)));
+        gizmos.line_2d(
+            ship_pos + offset,
+            end + offset,
+            Color::LinearRgba(LinearRgba::new(1.0, 0.15, 0.1, 0.3)),
+        );
+        gizmos.line_2d(
+            ship_pos - offset,
+            end - offset,
+            Color::LinearRgba(LinearRgba::new(1.0, 0.15, 0.1, 0.3)),
+        );
     }
 }
 
 /// Render railgun charge glow on Sniper ships.
 /// The railgun projectile visual is handled by init_projectiles/update_projectile_visuals.
-fn render_railgun(
-    ships: Query<(&ShipClass, &Transform, &RailgunCharge)>,
-    mut gizmos: Gizmos,
-) {
+fn render_railgun(ships: Query<(&ShipClass, &Transform, &RailgunCharge)>, mut gizmos: Gizmos) {
     for (class, ship_tf, charge) in ships.iter() {
         if *class != ShipClass::Sniper {
             continue;
@@ -1157,7 +1173,12 @@ fn render_railgun(
 /// Own cloaked ship gets slight transparency. Allied cloaked ships stay visible.
 fn update_cloak_visuals(
     mut ships: Query<
-        (&Cloak, &Team, &mut MeshMaterial2d<ColorMaterial>, Has<LocalShip>),
+        (
+            &Cloak,
+            &Team,
+            &mut MeshMaterial2d<ColorMaterial>,
+            Has<LocalShip>,
+        ),
         With<ShipInitialized>,
     >,
     local_team: Query<&Team, With<LocalShip>>,
@@ -1561,10 +1582,7 @@ fn class_picker_input(
 
 /// Handle clicks on class picker buttons.
 fn class_picker_button_interaction(
-    mut interaction_query: Query<
-        (&Interaction, &ClassPickerButton),
-        Changed<Interaction>,
-    >,
+    mut interaction_query: Query<(&Interaction, &ClassPickerButton), Changed<Interaction>>,
     mut picker: ResMut<ClassPicker>,
     mut overlay: Query<&mut Visibility, With<ClassPickerOverlay>>,
 ) {
