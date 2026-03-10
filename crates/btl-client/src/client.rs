@@ -19,6 +19,38 @@ use btl_shared::{
     Rotation, SHIP_MASS, SHIP_RADIUS,
 };
 
+/// Convert the cursor position to world coordinates using the primary window and camera.
+fn cursor_world_pos(
+    windows: &Query<&Window>,
+    camera_query: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+) -> Option<Vec2> {
+    let cursor_pos = windows.single().ok()?.cursor_position()?;
+    let (camera, cam_gt) = camera_query.single().ok()?;
+    camera.viewport_to_world_2d(cam_gt, cursor_pos).ok()
+}
+
+fn team_color(team: &Team) -> Color {
+    match team {
+        Team::Red => Color::srgb(1.0, 0.3, 0.3),
+        Team::Blue => Color::srgb(0.3, 0.3, 1.0),
+    }
+}
+
+fn spawn_gun_barrel(commands: &mut Commands, parent: Entity) {
+    commands.spawn((
+        ChildOf(parent),
+        GunBarrel,
+        Sprite {
+            color: Color::srgba(0.45, 0.45, 0.5, 0.85),
+            custom_size: Some(Vec2::new(14.0, 1.5)),
+            ..default()
+        },
+        Anchor::CENTER_LEFT,
+        Transform::from_xyz(0.0, 0.0, 0.1)
+            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
+    ));
+}
+
 /// Marker for the locally controlled ship.
 #[derive(Component)]
 pub struct LocalShip;
@@ -259,60 +291,25 @@ fn buffer_input(
     }
 
     // Compute aim angle: direction from ship to mouse cursor in world space
-    let aim_angle = (|| {
-        let window = windows.single().ok()?;
-        let cursor_pos = window.cursor_position()?;
-        let (camera, cam_gt) = camera_query.single().ok()?;
-        let world_pos = camera.viewport_to_world_2d(cam_gt, cursor_pos).ok()?;
-        let ship_tf = ship_query.single().ok()?;
-        let ship_pos = ship_tf.translation.truncate();
-        let delta = world_pos - ship_pos;
-        if delta.length_squared() > 1.0 {
-            Some(delta.y.atan2(delta.x))
-        } else {
-            None
-        }
-    })()
-    .unwrap_or(std::f32::consts::FRAC_PI_2); // default: aim up
+    let aim_angle = cursor_world_pos(&windows, &camera_query)
+        .and_then(|world_pos| {
+            let ship_pos = ship_query.single().ok()?.translation.truncate();
+            let delta = world_pos - ship_pos;
+            (delta.length_squared() > 1.0).then(|| delta.y.atan2(delta.x))
+        })
+        .unwrap_or(std::f32::consts::FRAC_PI_2); // default: aim up
 
-    // Map keyboard booleans to continuous values (0.0 or 1.0)
-    let rotate = match (
-        keypress.pressed(KeyCode::KeyA),
-        keypress.pressed(KeyCode::KeyD),
-    ) {
-        (true, false) => 1.0,
-        (false, true) => -1.0,
-        _ => 0.0,
-    };
-    let strafe = match (
-        keypress.pressed(KeyCode::KeyQ),
-        keypress.pressed(KeyCode::KeyE),
-    ) {
-        (true, false) => 1.0,
-        (false, true) => -1.0,
-        _ => 0.0,
-    };
+    let key = |k| f32::from(keypress.pressed(k));
+    let axis = |pos, neg| key(pos) - key(neg);
 
     for mut action_state in query.iter_mut() {
         action_state.0 = ShipInput {
-            thrust_forward: if keypress.pressed(KeyCode::KeyW) {
-                1.0
-            } else {
-                0.0
-            },
-            thrust_backward: if keypress.pressed(KeyCode::KeyS) {
-                1.0
-            } else {
-                0.0
-            },
-            rotate,
-            strafe,
+            thrust_forward: key(KeyCode::KeyW),
+            thrust_backward: key(KeyCode::KeyS),
+            rotate: axis(KeyCode::KeyA, KeyCode::KeyD),
+            strafe: axis(KeyCode::KeyQ, KeyCode::KeyE),
             afterburner: keypress.pressed(KeyCode::ShiftLeft),
-            stabilize: if keypress.pressed(KeyCode::KeyR) {
-                1.0
-            } else {
-                0.0
-            },
+            stabilize: key(KeyCode::KeyR),
             fire: mouse_button.pressed(MouseButton::Left),
             drop_mine: keypress.just_pressed(KeyCode::KeyX),
             aim_angle,
@@ -335,17 +332,10 @@ fn init_predicted_ships(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for (entity, player_id, team, is_controlled) in query.iter() {
-        let color = match team {
-            Team::Red => Color::srgb(1.0, 0.3, 0.3),
-            Team::Blue => Color::srgb(0.3, 0.3, 1.0),
-        };
-
-        // Interceptor dart hull
         let ship_mesh = meshes.add(create_interceptor_mesh(SHIP_RADIUS));
-
         commands.entity(entity).insert((
             Mesh2d(ship_mesh),
-            MeshMaterial2d(materials.add(color)),
+            MeshMaterial2d(materials.add(team_color(team))),
             ShipInitialized,
             FrameInterpolate::<Position> {
                 trigger_change_detection: true,
@@ -356,20 +346,7 @@ fn init_predicted_ships(
                 ..default()
             },
         ));
-
-        // Gun barrel: thin gray rectangle, rotates toward mouse cursor
-        commands.spawn((
-            ChildOf(entity),
-            GunBarrel,
-            Sprite {
-                color: Color::srgba(0.45, 0.45, 0.5, 0.85),
-                custom_size: Some(Vec2::new(14.0, 1.5)),
-                ..default()
-            },
-            Anchor::CENTER_LEFT,
-            Transform::from_xyz(0.0, 0.0, 0.1)
-                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-        ));
+        spawn_gun_barrel(&mut commands, entity);
 
         if is_controlled {
             // Local ship needs physics components for client-side prediction
@@ -405,32 +382,13 @@ fn init_interpolated_ships(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for (entity, player_id, team) in query.iter() {
-        let color = match team {
-            Team::Red => Color::srgb(1.0, 0.3, 0.3),
-            Team::Blue => Color::srgb(0.3, 0.3, 1.0),
-        };
-
         let ship_mesh = meshes.add(create_interceptor_mesh(SHIP_RADIUS));
-
         commands.entity(entity).insert((
             Mesh2d(ship_mesh),
-            MeshMaterial2d(materials.add(color)),
+            MeshMaterial2d(materials.add(team_color(team))),
             ShipInitialized,
         ));
-
-        // Gun barrel for remote ships (points forward by default)
-        commands.spawn((
-            ChildOf(entity),
-            GunBarrel,
-            Sprite {
-                color: Color::srgba(0.45, 0.45, 0.5, 0.85),
-                custom_size: Some(Vec2::new(14.0, 1.5)),
-                ..default()
-            },
-            Anchor::CENTER_LEFT,
-            Transform::from_xyz(0.0, 0.0, 0.1)
-                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-        ));
+        spawn_gun_barrel(&mut commands, entity);
 
         info!(
             "Spawned interpolated ship for {:?} on {:?} team",
@@ -1201,12 +1159,7 @@ fn route_planning_input(
 
     // Left-click adds waypoint (with angle validation)
     if planner.active && mouse_button.just_pressed(MouseButton::Left)
-        && let Some(world_pos) = (|| {
-            let window = windows.single().ok()?;
-            let cursor_pos = window.cursor_position()?;
-            let (camera, cam_gt) = camera_query.single().ok()?;
-            camera.viewport_to_world_2d(cam_gt, cursor_pos).ok()
-        })() {
+        && let Some(world_pos) = cursor_world_pos(&windows, &camera_query) {
             if waypoint_angle_ok(&planner.waypoints, world_pos) {
                 planner.waypoints.push(world_pos);
                 planner.last_rejected = false;
@@ -1337,12 +1290,7 @@ fn render_route_gizmos(
 
         // Show rejection indicator: red X at cursor position
         if planner.last_rejected
-            && let Some(cursor_world) = (|| {
-                let window = windows.single().ok()?;
-                let cursor_pos = window.cursor_position()?;
-                let (camera, cam_gt) = camera_query.single().ok()?;
-                camera.viewport_to_world_2d(cam_gt, cursor_pos).ok()
-            })() {
+            && let Some(cursor_world) = cursor_world_pos(&windows, &camera_query) {
                 let s = 12.0 * scale;
                 let red = Color::srgba(1.0, 0.2, 0.2, 0.8);
                 gizmos.line_2d(
@@ -1555,19 +1503,12 @@ fn route_follow(
     let stabilize = ((speed_excess / 80.0) + sideslip_brake).clamp(0.0, 1.0);
 
     // Compute aim angle from mouse cursor
-    let aim_angle = (|| {
-        let window = windows.single().ok()?;
-        let cursor_pos = window.cursor_position()?;
-        let (camera, cam_gt) = camera_query.single().ok()?;
-        let world_pos = camera.viewport_to_world_2d(cam_gt, cursor_pos).ok()?;
-        let delta = world_pos - ship_pos;
-        if delta.length_squared() > 1.0 {
-            Some(delta.y.atan2(delta.x))
-        } else {
-            None
-        }
-    })()
-    .unwrap_or(desired_angle);
+    let aim_angle = cursor_world_pos(&windows, &camera_query)
+        .and_then(|world_pos| {
+            let delta = world_pos - ship_pos;
+            (delta.length_squared() > 1.0).then(|| delta.y.atan2(delta.x))
+        })
+        .unwrap_or(desired_angle);
 
     for mut action_state in input_query.iter_mut() {
         action_state.0 = ShipInput {

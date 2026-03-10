@@ -30,20 +30,12 @@ impl Plugin for StarfieldPlugin {
 
 fn spawn_stars(mut commands: Commands) {
     let stars_per_layer = STAR_COUNT / STAR_LAYERS.len();
-    // Simple deterministic hash for reproducible star positions
-    let mut seed: u64 = 0xDEAD_BEEF;
-    let mut rng = move || -> f32 {
-        seed ^= seed << 13;
-        seed ^= seed >> 7;
-        seed ^= seed << 17;
-        // Map to 0..1
-        (seed % 10000) as f32 / 10000.0
-    };
+    let mut rng = btl_shared::rng::Rng::new(0xDEAD_BEEF);
 
     for &(parallax, size, color) in STAR_LAYERS {
         for _ in 0..stars_per_layer {
-            let x = (rng() - 0.5) * 2.0 * FIELD_HALF_SIZE;
-            let y = (rng() - 0.5) * 2.0 * FIELD_HALF_SIZE;
+            let x = (rng.next_f32() - 0.5) * 2.0 * FIELD_HALF_SIZE;
+            let y = (rng.next_f32() - 0.5) * 2.0 * FIELD_HALF_SIZE;
 
             commands.spawn((
                 Star {

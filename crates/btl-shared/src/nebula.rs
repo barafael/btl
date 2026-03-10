@@ -192,26 +192,7 @@ impl Expr {
     }
 }
 
-// ─── Simple xorshift64 RNG ──────────────────────────────────────────────────
-
-struct NebulaRng(u64);
-
-impl NebulaRng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    fn next_u32(&mut self) -> u32 {
-        (self.next() & 0xFFFF_FFFF) as u32
-    }
-
-    fn next_f32(&mut self) -> f32 {
-        (self.next() % 1_000_000) as f32 / 1_000_000.0
-    }
-}
+use crate::rng::Rng as NebulaRng;
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -227,7 +208,7 @@ const NEBULA_DEPTH: u32 = 5;
 
 /// Generate nebula programs from a seed. Deterministic: same seed = same nebula.
 pub fn generate_nebula(seed: u64) -> NebulaPrograms {
-    let mut rng = NebulaRng(seed);
+    let mut rng = NebulaRng::new(seed);
     let r_expr = Expr::generate(&mut rng, NEBULA_DEPTH);
     let g_expr = Expr::generate(&mut rng, NEBULA_DEPTH);
     let b_expr = Expr::generate(&mut rng, NEBULA_DEPTH);

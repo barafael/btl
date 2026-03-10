@@ -32,14 +32,14 @@ pub struct Asteroid {
     pub radius: f32,
 }
 
-/// Ship health points.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Health {
+/// A current/max gauge — shared structure for health, fuel, ammo, etc.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Gauge {
     pub current: f32,
     pub max: f32,
 }
 
-impl Health {
+impl Gauge {
     pub fn new(max: f32) -> Self {
         Self { current: max, max }
     }
@@ -52,48 +52,21 @@ impl Health {
         }
     }
 }
+
+/// Ship health points.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Deref, DerefMut)]
+pub struct Health(pub Gauge);
+impl Health { pub fn new(max: f32) -> Self { Self(Gauge::new(max)) } }
 
 /// Afterburner fuel.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Fuel {
-    pub current: f32,
-    pub max: f32,
-}
-
-impl Fuel {
-    pub fn new(max: f32) -> Self {
-        Self { current: max, max }
-    }
-
-    pub fn fraction(&self) -> f32 {
-        if self.max > 0.0 {
-            self.current / self.max
-        } else {
-            0.0
-        }
-    }
-}
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Deref, DerefMut)]
+pub struct Fuel(pub Gauge);
+impl Fuel { pub fn new(max: f32) -> Self { Self(Gauge::new(max)) } }
 
 /// Autocannon ammunition.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Ammo {
-    pub current: f32,
-    pub max: f32,
-}
-
-impl Ammo {
-    pub fn new(max: f32) -> Self {
-        Self { current: max, max }
-    }
-
-    pub fn fraction(&self) -> f32 {
-        if self.max > 0.0 {
-            self.current / self.max
-        } else {
-            0.0
-        }
-    }
-}
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Deref, DerefMut)]
+pub struct Ammo(pub Gauge);
+impl Ammo { pub fn new(max: f32) -> Self { Self(Gauge::new(max)) } }
 
 /// Projectile marker. Carries damage, owner, and remaining lifetime.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -114,29 +87,19 @@ pub struct Mine {
     pub arm_timer: f32,
 }
 
-/// Tracks when a ship can next fire.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct FireCooldown {
+/// A cooldown timer that ticks toward zero.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Cooldown {
     pub remaining: f32,
 }
+
+/// Tracks when a ship can next fire.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default, Deref, DerefMut)]
+pub struct FireCooldown(pub Cooldown);
 
 /// Tracks when a ship can next drop a mine.
-#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct MineCooldown {
-    pub remaining: f32,
-}
-
-impl Default for FireCooldown {
-    fn default() -> Self {
-        Self { remaining: 0.0 }
-    }
-}
-
-impl Default for MineCooldown {
-    fn default() -> Self {
-        Self { remaining: 0.0 }
-    }
-}
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default, Deref, DerefMut)]
+pub struct MineCooldown(pub Cooldown);
 
 /// Seed for procedural nebula background generation.
 /// Server picks a seed; clients generate the texture locally.

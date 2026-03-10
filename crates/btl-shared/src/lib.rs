@@ -1,5 +1,7 @@
 pub mod nebula;
+pub mod rng;
 
+use std::ops::DerefMut;
 use avian2d::prelude::*;
 pub use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
@@ -140,30 +142,9 @@ const ASTEROID_SIZES: &[(f32, f32)] = &[
     (200.0, 0.15), // huge
 ];
 
-/// Simple seeded RNG (xorshift64) for deterministic asteroid placement.
-struct SeededRng(u64);
-
-impl SeededRng {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    /// Returns a float in [0, 1)
-    fn next_f32(&mut self) -> f32 {
-        (self.next() % 1_000_000) as f32 / 1_000_000.0
-    }
-}
-
 /// Deterministic asteroid layout. Returns (position, radius, rotation_radians).
 pub fn generate_asteroid_layout() -> Vec<(Vec2, f32, f32)> {
-    let mut rng = SeededRng::new(ASTEROID_SEED);
+    let mut rng = rng::Rng::new(ASTEROID_SEED);
     let mut asteroids = Vec::with_capacity(ASTEROID_COUNT);
 
     for _ in 0..ASTEROID_COUNT {
@@ -275,8 +256,8 @@ impl Plugin for SharedPlugin {
                 apply_ship_input,
                 update_fuel,
                 update_ammo,
-                tick_fire_cooldown,
-                tick_mine_cooldown,
+                tick_cooldown::<FireCooldown>,
+                tick_cooldown::<MineCooldown>,
                 update_projectile_lifetime,
                 check_projectile_asteroid_collisions,
                 update_mine_lifetime,
@@ -432,8 +413,8 @@ fn apply_ship_input(
     }
 }
 
-/// Tick down fire cooldowns.
-fn tick_fire_cooldown(mut query: Query<&mut FireCooldown>) {
+/// Tick down any cooldown component.
+fn tick_cooldown<T: Component<Mutability = bevy::ecs::component::Mutable> + DerefMut<Target = Cooldown>>(mut query: Query<&mut T>) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     for mut cd in query.iter_mut() {
         if cd.remaining > 0.0 {
@@ -459,15 +440,6 @@ fn update_projectile_lifetime(
     }
 }
 
-/// Tick down mine cooldowns.
-fn tick_mine_cooldown(mut query: Query<&mut MineCooldown>) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
-    for mut cd in query.iter_mut() {
-        if cd.remaining > 0.0 {
-            cd.remaining = (cd.remaining - dt).max(0.0);
-        }
-    }
-}
 
 /// Tick mine arm timers and lifetime. Despawn expired mines.
 fn update_mine_lifetime(mut commands: Commands, mut query: Query<(Entity, &mut Mine)>) {

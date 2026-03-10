@@ -10,7 +10,7 @@ pub struct EffectsPlugin;
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EntityPositionCache>();
-        app.insert_resource(EffectRng(0xEFFE_C700_DEAD_CAFE));
+        app.insert_resource(EffectRng(btl_shared::rng::Rng::new(0xEFFE_C700_DEAD_CAFE)));
         app.add_systems(
             Update,
             (
@@ -33,18 +33,8 @@ struct EntityPositionCache {
     mines: HashMap<Entity, (Vec2, f32)>,       // (position, remaining lifetime)
 }
 
-/// Simple RNG for effect variation.
-#[derive(Resource)]
-struct EffectRng(u64);
-
-impl EffectRng {
-    fn next_f32(&mut self) -> f32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        ((self.0 >> 16) as u32 & 0x00FF_FFFF) as f32 / 16777216.0
-    }
-}
+#[derive(Resource, Deref, DerefMut)]
+struct EffectRng(btl_shared::rng::Rng);
 
 #[derive(Component)]
 struct EffectParticle {

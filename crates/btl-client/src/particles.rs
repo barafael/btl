@@ -58,36 +58,14 @@ struct Particle {
     afterburner: bool,
 }
 
-/// Simple fast hash for pseudo-random particle variation
-#[derive(Resource)]
-struct ParticleRng(u64);
-
-impl ParticleRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.0 = x;
-        (x >> 16) as u32
-    }
-
-    /// Returns value in 0..1
-    fn next_f32(&mut self) -> f32 {
-        (self.next_u32() & 0x00FF_FFFF) as f32 / 16777216.0
-    }
-
-    /// Returns value in -1..1
-    fn next_signed(&mut self) -> f32 {
-        self.next_f32() * 2.0 - 1.0
-    }
-}
+#[derive(Resource, Deref, DerefMut)]
+struct ParticleRng(btl_shared::rng::Rng);
 
 pub struct ParticlePlugin;
 
 impl Plugin for ParticlePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ParticleRng(0xDEAD_BEEF_CAFE_1234));
+        app.insert_resource(ParticleRng(btl_shared::rng::Rng::new(0xDEAD_BEEF_CAFE_1234)));
         app.add_systems(Update, (spawn_thruster_particles, update_particles));
     }
 }
