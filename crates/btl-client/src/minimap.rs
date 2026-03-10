@@ -10,6 +10,8 @@ const MINIMAP_SIZE: f32 = 200.0;
 const MINIMAP_MARGIN: f32 = 12.0;
 /// Scale: world units -> minimap pixels
 const MINIMAP_SCALE: f32 = MINIMAP_SIZE / (MAP_RADIUS * 2.0);
+/// Radius of the circular minimap in pixels
+const MINIMAP_RADIUS: f32 = MINIMAP_SIZE / 2.0;
 
 pub struct MinimapPlugin;
 
@@ -31,8 +33,15 @@ struct MinimapDot {
 #[derive(Component)]
 struct MinimapViewport;
 
+/// Check if a pixel position is inside the circular minimap.
+fn inside_circle(x: f32, y: f32) -> bool {
+    let dx = x - MINIMAP_RADIUS;
+    let dy = y - MINIMAP_RADIUS;
+    dx * dx + dy * dy <= MINIMAP_RADIUS * MINIMAP_RADIUS
+}
+
 fn spawn_minimap(mut commands: Commands) {
-    let center = MINIMAP_SIZE / 2.0;
+    let center = MINIMAP_RADIUS;
 
     let root = commands
         .spawn((
@@ -44,6 +53,7 @@ fn spawn_minimap(mut commands: Commands) {
                 width: Val::Px(MINIMAP_SIZE),
                 height: Val::Px(MINIMAP_SIZE),
                 overflow: Overflow::clip(),
+                border_radius: BorderRadius::MAX,
                 ..default()
             },
             BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.7)),
@@ -51,28 +61,7 @@ fn spawn_minimap(mut commands: Commands) {
         ))
         .id();
 
-    // Map boundary circle
-    let boundary_dots = 60;
-    let boundary_r = MAP_RADIUS * MINIMAP_SCALE;
-    for i in 0..boundary_dots {
-        let angle = (i as f32 / boundary_dots as f32) * std::f32::consts::TAU;
-        let x = center + boundary_r * angle.cos() - 1.0;
-        let y = center - boundary_r * angle.sin() - 1.0;
-        commands.spawn((
-            ChildOf(root),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(x),
-                top: Val::Px(y),
-                width: Val::Px(2.0),
-                height: Val::Px(2.0),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.3, 0.1, 0.1, 0.6)),
-        ));
-    }
-
-    // Objective zone circles
+    // Objective zone circles — only spawn dots inside round minimap
     let zones = objective_zone_positions();
     let zone_dots = 30;
     let zone_r = OBJECTIVE_ZONE_RADIUS * MINIMAP_SCALE;
@@ -83,6 +72,9 @@ fn spawn_minimap(mut commands: Commands) {
             let angle = (i as f32 / zone_dots as f32) * std::f32::consts::TAU;
             let x = cx + zone_r * angle.cos() - 1.0;
             let y = cy + zone_r * angle.sin() - 1.0;
+            if !inside_circle(x, y) {
+                continue;
+            }
             commands.spawn((
                 ChildOf(root),
                 Node {
@@ -119,7 +111,7 @@ fn spawn_minimap(mut commands: Commands) {
 fn update_minimap_dots(
     mut commands: Commands,
     ships: Query<(Entity, &Transform, &Team), With<PlayerId>>,
-    mut dots: Query<(Entity, &MinimapDot, &mut Node), Without<MinimapViewport>>,
+    mut dots: Query<(Entity, &MinimapDot, &mut Node, &mut Visibility), Without<MinimapViewport>>,
     minimap_root: Query<Entity, With<MinimapRoot>>,
     mut viewport: Query<&mut Node, (With<MinimapViewport>, Without<MinimapDot>)>,
     camera_query: Query<(&Transform, &Projection), With<Camera2d>>,
@@ -128,18 +120,24 @@ fn update_minimap_dots(
     let Ok(root) = minimap_root.single() else {
         return;
     };
-    let center = MINIMAP_SIZE / 2.0;
+    let center = MINIMAP_RADIUS;
 
     let mut existing: std::collections::HashSet<Entity> = std::collections::HashSet::new();
     let mut to_remove = Vec::new();
 
-    for (dot_entity, dot, mut node) in dots.iter_mut() {
+    for (dot_entity, dot, mut node, mut vis) in dots.iter_mut() {
         if let Ok((_, transform, _)) = ships.get(dot.tracked) {
             existing.insert(dot.tracked);
             let x = center + transform.translation.x * MINIMAP_SCALE - 2.0;
             let y = center - transform.translation.y * MINIMAP_SCALE - 2.0;
             node.left = Val::Px(x);
             node.top = Val::Px(y);
+            // Hide dots outside the circular minimap
+            *vis = if inside_circle(x, y) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
         } else {
             to_remove.push(dot_entity);
         }
@@ -183,20 +181,21 @@ fn update_minimap_dots(
     // Update viewport rectangle
     if let Ok((cam_tf, projection)) = camera_query.single()
         && let Projection::Orthographic(ortho) = projection
-            && let Ok(mut node) = viewport.single_mut() {
-                let cam_x = cam_tf.translation.x;
-                let cam_y = cam_tf.translation.y;
-                let half_w = ortho.area.width() / 2.0;
-                let half_h = ortho.area.height() / 2.0;
+        && let Ok(mut node) = viewport.single_mut()
+    {
+        let cam_x = cam_tf.translation.x;
+        let cam_y = cam_tf.translation.y;
+        let half_w = ortho.area.width() / 2.0;
+        let half_h = ortho.area.height() / 2.0;
 
-                let vp_w = half_w * 2.0 * MINIMAP_SCALE;
-                let vp_h = half_h * 2.0 * MINIMAP_SCALE;
-                let vp_x = center + (cam_x - half_w) * MINIMAP_SCALE;
-                let vp_y = center - (cam_y + half_h) * MINIMAP_SCALE;
+        let vp_w = half_w * 2.0 * MINIMAP_SCALE;
+        let vp_h = half_h * 2.0 * MINIMAP_SCALE;
+        let vp_x = center + (cam_x - half_w) * MINIMAP_SCALE;
+        let vp_y = center - (cam_y + half_h) * MINIMAP_SCALE;
 
-                node.left = Val::Px(vp_x);
-                node.top = Val::Px(vp_y);
-                node.width = Val::Px(vp_w);
-                node.height = Val::Px(vp_h);
-            }
+        node.left = Val::Px(vp_x);
+        node.top = Val::Px(vp_y);
+        node.width = Val::Px(vp_w);
+        node.height = Val::Px(vp_h);
+    }
 }

@@ -65,7 +65,9 @@ pub struct ParticlePlugin;
 
 impl Plugin for ParticlePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(ParticleRng(btl_shared::rng::Rng::new(0xDEAD_BEEF_CAFE_1234)));
+        app.insert_resource(ParticleRng(btl_shared::rng::Rng::new(
+            0xDEAD_BEEF_CAFE_1234,
+        )));
         app.add_systems(Update, (spawn_thruster_particles, update_particles));
     }
 }

@@ -60,9 +60,10 @@ fn detect_despawned_effects(
 ) {
     for entity in removed_projectiles.read() {
         if let Some(&(pos, lifetime)) = cache.projectiles.get(&entity)
-            && lifetime > 0.2 {
-                spawn_impact_sparks(&mut commands, pos, &mut rng);
-            }
+            && lifetime > 0.2
+        {
+            spawn_impact_sparks(&mut commands, pos, &mut rng);
+        }
     }
 
     for entity in removed_mines.read() {

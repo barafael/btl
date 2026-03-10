@@ -50,13 +50,16 @@
 ### 2.2 2.5D Visuals
 
 - [x] Parallax background: 4 star layers (parallax 0.05/0.15/0.3/0.5), infinite wrapping, 400 stars
-- [x] Ship rendering: Mesh2d triangles with team color, rotation via `FrameInterpolate`
+- [x] Ship rendering: procedural interceptor mesh (6-vertex needle hull), team-colored, `FrameInterpolate`
+- [x] Gun barrel: child sprite rotating toward mouse cursor (aim direction visualization)
 - [x] Asteroid meshes: 7-sided polygons with per-entity color variation
+- [x] Procedural nebula background: seeded expression-tree VM (R/G/B channels), 128×128 animated texture, slow ~9min cycle
 - [x] Minimap overlay (bottom-right corner)
   - Map boundary circle, objective zone circles, ship dots (team-colored)
   - Camera viewport rectangle indicator
+  - Nebula background layer
   - Clipped to minimap bounds
-- [ ] Ship sprites: replace placeholder triangles with proper ship sprites/meshes (deferred to Phase 5)
+- [ ] Per-class ship sprites: replace procedural mesh with proper sprites/meshes per class (deferred to Phase 5)
 - [ ] Basic lighting/shadow pass (deferred to Phase 5)
 
 ### 2.3 HUD
@@ -64,8 +67,8 @@
 - [x] Health bar (HP) with red fill, bottom-left
 - [x] Fuel gauge (FU) with blue fill, afterburner consumption/regen system
 - [x] Speed indicator + coordinate display
-- [ ] Ammo indicator (per weapon, deferred until Phase 3)
-- [ ] Team color indicators on HUD and ship labels (deferred)
+- [x] Ammo indicator bar (AM) with fill, per-weapon
+- [ ] Team color indicators on HUD and ship labels
 - [ ] Kill feed / event log (deferred until Phase 3)
 
 **Phase 2 is complete when:** Players fly around a circular map with asteroids, parallax background, minimap, and a basic HUD showing health/fuel/speed.
@@ -83,9 +86,12 @@
 - [x] Respawn system: server-side queue, respawn at team-based positions
 - [x] Projectile lifetime: despawn after max time (shared system)
 - [x] Muzzle offset: spawn projectiles at ship edge, not center
-- [x] Fire cooldown: shared tick-down, server-authoritative firing
+- [x] Fire cooldown: shared generic tick-down system, server-authoritative firing
 - [x] Client rendering: HDR team-colored projectile circles (bloom-compatible)
+- [x] VFX: muzzle flash (HDR sprite, 0.04s), impact sparks (5-point burst), mine drop flash, mine detonation (central flash + expanding ring + debris)
+- [x] Mine visuals: circle mesh + shadow, rotation + bob animation, pulsing while active
 - [ ] Drifting wreck entity on destruction (deferred)
+- [ ] Damage flash: brief white flash on ship when hit
 
 ### 3.2 Ship Classes
 
@@ -112,7 +118,21 @@ Implement one at a time, in this order:
    - Attack drones: 7 small AI-controlled entities, swarm behavior, low HP, respawn slowly (1 per 8s, faster at objectives)
    - Anti-drone pulse: AoE ability, destroys ALL nearby drones (friend and foe), 20s cooldown
 
-### 3.3 Ship Selection
+### 3.3 Route Planning & Autopilot ✅
+
+- [x] Ctrl-click waypoint placement with visual path preview (gizmos)
+- [x] Catmull-Rom spline interpolation between waypoints
+- [x] Curvature-based speed profile: auto-brakes for tight turns, accelerates on straights
+- [x] Path coloring: green (fast) → yellow → red (slow) based on curvature
+- [x] 60° minimum turn angle validation (rejects hairpin turns with red X indicator)
+- [x] Proportional autopilot: throttle, rotation, strafe, and stabilize from path following
+- [x] Cross-track error correction via strafing (PID-style lateral control)
+- [x] Arc-length parameterization for accurate distance-based progress
+- [x] Camera zoom-out animation during planning mode (4× zoom)
+- [x] Manual override: any movement key cancels autopilot instantly
+- [x] Mouse weapons still active during autopilot (aim + fire while following route)
+
+### 3.4 Ship Selection
 
 - Pre-spawn class selection UI overlay
 - Team assignment (red/blue) — server assigns to balance teams
@@ -193,10 +213,14 @@ Defenses activate when objective is captured, deactivate when neutral/enemy-owne
 
 - [x] Thruster particles: HDR color gradient, bloom, velocity inheritance, halo/ember variants, directional cones per input
 - [x] Afterburner flare: enhanced thruster particles at higher intensity
-- [ ] Weapon fire effects: muzzle flash (bright HDR sprite, 0.05s), beam glow (for lasers), torpedo trail (smoke particles)
-- [ ] Explosions: expanding ring + debris particles on ship destruction and torpedo detonation
+- [x] Muzzle flash: bright HDR sprite (0.04s) on projectile spawn
+- [x] Impact sparks: 5-point yellow burst at projectile hit point
+- [x] Mine placement flash: white HDR flash on deploy
+- [x] Mine detonation: central flash + 16-particle expanding ring + 8 debris particles
+- [x] Mine pulsing glow while active (rotation + bob animation)
+- [ ] Beam glow (for lasers), torpedo trail (smoke particles)
+- [ ] Ship destruction explosion: expanding ring + debris particles
 - [ ] Shield impact: ripple effect at impact point on Powerplant shield
-- [ ] Mine placement: brief flash on deploy, pulsing glow while active
 - [ ] Cloak shimmer: distortion/transparency effect on cloaked Sniper
 - [ ] Damage flash: brief white flash on ship when hit
 
@@ -262,38 +286,69 @@ Defenses activate when objective is captured, deactivate when neutral/enemy-owne
 
 ```text
 Phase 1: Foundation ✅ ─── project structure → networking → ship movement
-Phase 2: World ✅ ─────── asteroids ✅ → tridrants ✅ → minimap ✅ → HUD ✅ → fuel system ✅
-Phase 3: Combat 🔧 ─────── weapons framework ✅ → 5 ship classes → selection
+Phase 2: World ✅ ─────── asteroids ✅ → tridrants ✅ → minimap ✅ → HUD ✅ → nebula ✅
+Phase 3: Combat 🔧 ─────── Interceptor ✅ → route planner ✅ → VFX ✅ → 4 classes → selection
 Phase 4: Objectives ❌ ─── capture zones → defenses → benefits → win condition
-Phase 5: Game Feel 🔧 ─── thruster particles ✅ → fog/VFX/audio ❌ → collision polish ❌
+Phase 5: Game Feel 🔧 ─── particles ✅ → combat VFX ✅ → fog/audio ❌ → collision polish ❌
 Phase 6: Polish ❌ ─────── lobby → balance → infrastructure → anti-cheat
 ```
 
 ### What's done
 
-- 4-crate workspace with Bevy 0.18, Lightyear 0.26, Avian2D 0.5
-- Full Newtonian flight model: thrust, strafe, rotate, afterburner (with fuel), stabilize
-- Server-authoritative networking with client prediction and interpolation
-- Rollback thresholds to prevent jinking on low-latency connections
-- Ship-ship and ship-asteroid collision with restitution
-- 80 deterministic asteroids (4 size variants, seeded layout, replicated)
-- 3 tridrant sector lines + 3 objective zone circles
-- Parallax starfield (4 layers, infinite wrapping)
-- HDR particle system (thruster flames with bloom, halos, embers)
-- Circular map boundary (radius 6000) with soft zone + reflection
-- Minimap with boundary, objective zones, ship dots, and viewport rectangle
-- HUD: health bar, fuel gauge (consumption + regen), speed + coordinates
+#### Foundation & Networking
+
+- 4-crate workspace: Bevy 0.18, Lightyear 0.26, Avian2D 0.5
+- Server-authoritative physics with client-side prediction and interpolation
+- Rollback thresholds on Position/Rotation/Velocity to prevent jinking
 - WASM/browser support via Trunk + WebTransport (Chrome/Edge)
-- Autocannon projectiles: server-authoritative spawn, shared cooldown/lifetime, HDR rendering
+
+#### Flight & Physics
+
+- Full Newtonian flight model: thrust, strafe, rotate, afterburner (with fuel), stabilize
+- Ship-ship and ship-asteroid collision with restitution (0.8)
+- Circular map boundary (radius 6000) with soft zone + hard reflection
+- Speed cap (600), angular speed cap (6.0)
+
+#### World & Visuals
+
+- 80 deterministic asteroids (4 size variants, 7-sided polygon meshes, seeded layout)
+- 3 tridrant sector lines + 3 objective zone circles
+- Parallax starfield (4 layers, 400 stars, infinite wrapping)
+- Procedural nebula background (seeded expression-tree VM, 128×128 animated texture)
+- Interceptor hull mesh (6-vertex needle shape) with gun barrel child sprite
+
+#### HUD & UI
+
+- Health, fuel, ammo bars (bottom-left) with live fill updates
+- Speed indicator + coordinate display
+- Minimap (bottom-right): boundary, zones, ship dots, viewport rect, nebula layer
+
+#### Combat (Interceptor class)
+
+- Autocannon: 8 rounds/s, server-authoritative spawn, HDR team-colored projectiles
+- Mines: X key, proximity detonation (60u), 30s lifetime, 1s arm time, max 5 active
 - Hit detection: circle-circle overlap (server-only), damage application, HP clamping
 - Ship destruction at 0 HP with 3s respawn timer (server-side queue)
 
+#### VFX
+
+- HDR thruster particles: core/halo/ember variants, directional cones, afterburner flare, fuel sputter
+- Muzzle flash, impact sparks, mine drop flash, mine detonation (flash + ring + debris)
+- Mine visuals: mesh + shadow, rotation/bob animation
+
+#### Route Planning & Autopilot
+
+- Ctrl-click waypoint placement with Catmull-Rom spline path
+- Curvature-aware speed profile with color-coded preview (green→red)
+- Proportional autopilot with cross-track correction, manual override on any key
+- Camera zoom-out during planning, weapons still active while following
+
 ### Next up (Phase 3: Combat, continued)
 
-1. ~~Projectile entity framework~~ ✅
-2. ~~Hit detection + damage application + ship destruction~~ ✅
-3. ~~Interceptor class: autocannon + mines~~ ✅
-4. Ship class selection UI
-5. Remaining 4 ship classes (Gunship, Torpedo Boat, Sniper, Drone Commander)
+1. Gunship class: heavy cannon + 3 auto-turrets with independent targeting AI
+2. Torpedo Boat class: continuous laser + homing torpedoes
+3. Sniper class: charge-up railgun + proximity mines + cloak
+4. Drone Commander class: defense lasers + attack drones + anti-drone pulse
+5. Ship class selection UI (pre-spawn overlay)
 
 Each phase builds on the previous. Phases are playable milestones — after each one, the game is testable and demonstrable at that level of completeness.

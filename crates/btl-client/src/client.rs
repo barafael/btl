@@ -514,13 +514,26 @@ struct MineShadow {
 
 type MineCoreFilter = (Without<MineInitialized>, Without<MineShadow>);
 type MineShadowFilter = (Without<MineInitialized>, Without<MineCore>);
-type ShipForMineFilter = (With<ShipInitialized>, Without<MineInitialized>, Without<MineCore>, Without<MineShadow>);
+type ShipForMineFilter = (
+    With<ShipInitialized>,
+    Without<MineInitialized>,
+    Without<MineCore>,
+    Without<MineShadow>,
+);
 
 /// Pulse mine cores, position shadows, proximity warning, and clean up orphaned children.
 fn update_mine_visuals(
     mut commands: Commands,
     mines: Query<(Entity, &Mine, &Transform), With<MineInitialized>>,
-    mut cores: Query<(Entity, &MineCore, &mut Transform, &mut MeshMaterial2d<ColorMaterial>), MineCoreFilter>,
+    mut cores: Query<
+        (
+            Entity,
+            &MineCore,
+            &mut Transform,
+            &mut MeshMaterial2d<ColorMaterial>,
+        ),
+        MineCoreFilter,
+    >,
     mut shadows: Query<(Entity, &MineShadow, &mut Transform), MineShadowFilter>,
     ships: Query<(&Transform, &Team), ShipForMineFilter>,
     time: Res<Time>,
@@ -606,9 +619,24 @@ struct FuelBarFill;
 #[derive(Component)]
 struct AmmoBarFill;
 
-type HealthBarFilter = (With<HealthBarFill>, Without<FuelBarFill>, Without<AmmoBarFill>, Without<HudText>);
-type FuelBarFilter = (With<FuelBarFill>, Without<HealthBarFill>, Without<AmmoBarFill>, Without<HudText>);
-type AmmoBarFilter = (With<AmmoBarFill>, Without<HealthBarFill>, Without<FuelBarFill>, Without<HudText>);
+type HealthBarFilter = (
+    With<HealthBarFill>,
+    Without<FuelBarFill>,
+    Without<AmmoBarFill>,
+    Without<HudText>,
+);
+type FuelBarFilter = (
+    With<FuelBarFill>,
+    Without<HealthBarFill>,
+    Without<AmmoBarFill>,
+    Without<HudText>,
+);
+type AmmoBarFilter = (
+    With<AmmoBarFill>,
+    Without<HealthBarFill>,
+    Without<FuelBarFill>,
+    Without<HudText>,
+);
 
 const BAR_WIDTH: f32 = 160.0;
 const BAR_HEIGHT: f32 = 10.0;
@@ -764,13 +792,18 @@ fn spawn_hud(mut commands: Commands) {
         BackgroundColor(Color::srgb(0.7, 0.5, 0.2)),
     ));
 
-    // Speed + coords text
+    // Speed + coords text (top-left)
     commands.spawn((
-        ChildOf(panel),
         HudText,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(12.0),
+            left: Val::Px(12.0),
+            ..default()
+        },
         Text::new("SPD 0 | (0, 0)"),
         TextFont {
-            font_size: 12.0,
+            font_size: 14.0,
             ..default()
         },
         TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)),
@@ -1158,24 +1191,28 @@ fn route_planning_input(
     }
 
     // Left-click adds waypoint (with angle validation)
-    if planner.active && mouse_button.just_pressed(MouseButton::Left)
-        && let Some(world_pos) = cursor_world_pos(&windows, &camera_query) {
-            if waypoint_angle_ok(&planner.waypoints, world_pos) {
-                planner.waypoints.push(world_pos);
-                planner.last_rejected = false;
-                rebuild_route_path(&mut planner);
-            } else {
-                planner.last_rejected = true;
-            }
-        }
-
-    // Right-click removes last waypoint
-    if planner.active && mouse_button.just_pressed(MouseButton::Right)
-        && planner.waypoints.len() > 1 {
-            planner.waypoints.pop();
+    if planner.active
+        && mouse_button.just_pressed(MouseButton::Left)
+        && let Some(world_pos) = cursor_world_pos(&windows, &camera_query)
+    {
+        if waypoint_angle_ok(&planner.waypoints, world_pos) {
+            planner.waypoints.push(world_pos);
             planner.last_rejected = false;
             rebuild_route_path(&mut planner);
+        } else {
+            planner.last_rejected = true;
         }
+    }
+
+    // Right-click removes last waypoint
+    if planner.active
+        && mouse_button.just_pressed(MouseButton::Right)
+        && planner.waypoints.len() > 1
+    {
+        planner.waypoints.pop();
+        planner.last_rejected = false;
+        rebuild_route_path(&mut planner);
+    }
 
     // On CTRL release, commit the route
     if ctrl_just_released && planner.active {
@@ -1183,18 +1220,19 @@ fn route_planning_input(
         planner.target_zoom = 1.0;
 
         if planner.path.len() >= 2
-            && let Ok((entity, _)) = ship_query.single() {
-                let arc_lengths = compute_arc_lengths(&planner.path);
-                let speed_profile = compute_speed_profile(&planner.curvatures, &arc_lengths);
-                commands.entity(entity).insert(RouteFollowing {
-                    path: planner.path.clone(),
-                    curvatures: planner.curvatures.clone(),
-                    arc_lengths,
-                    speed_profile,
-                    progress: 0.0,
-                    cte_integral: 0.0,
-                });
-            }
+            && let Ok((entity, _)) = ship_query.single()
+        {
+            let arc_lengths = compute_arc_lengths(&planner.path);
+            let speed_profile = compute_speed_profile(&planner.curvatures, &arc_lengths);
+            commands.entity(entity).insert(RouteFollowing {
+                path: planner.path.clone(),
+                curvatures: planner.curvatures.clone(),
+                arc_lengths,
+                speed_profile,
+                progress: 0.0,
+                cte_integral: 0.0,
+            });
+        }
         planner.waypoints.clear();
         planner.path.clear();
         planner.curvatures.clear();
@@ -1290,20 +1328,21 @@ fn render_route_gizmos(
 
         // Show rejection indicator: red X at cursor position
         if planner.last_rejected
-            && let Some(cursor_world) = cursor_world_pos(&windows, &camera_query) {
-                let s = 12.0 * scale;
-                let red = Color::srgba(1.0, 0.2, 0.2, 0.8);
-                gizmos.line_2d(
-                    cursor_world + Vec2::new(-s, -s),
-                    cursor_world + Vec2::new(s, s),
-                    red,
-                );
-                gizmos.line_2d(
-                    cursor_world + Vec2::new(-s, s),
-                    cursor_world + Vec2::new(s, -s),
-                    red,
-                );
-            }
+            && let Some(cursor_world) = cursor_world_pos(&windows, &camera_query)
+        {
+            let s = 12.0 * scale;
+            let red = Color::srgba(1.0, 0.2, 0.2, 0.8);
+            gizmos.line_2d(
+                cursor_world + Vec2::new(-s, -s),
+                cursor_world + Vec2::new(s, s),
+                red,
+            );
+            gizmos.line_2d(
+                cursor_world + Vec2::new(-s, s),
+                cursor_world + Vec2::new(s, -s),
+                red,
+            );
+        }
     }
 }
 

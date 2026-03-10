@@ -1,7 +1,6 @@
 pub mod nebula;
 pub mod rng;
 
-use std::ops::DerefMut;
 use avian2d::prelude::*;
 pub use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
@@ -9,6 +8,7 @@ use lightyear::avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
 pub use lightyear::frame_interpolation::prelude::{FrameInterpolate, FrameInterpolationPlugin};
 use lightyear::prelude::input::native::ActionState;
 use lightyear::prelude::*;
+use std::ops::DerefMut;
 
 use btl_protocol::*;
 pub use btl_protocol::{
@@ -414,7 +414,11 @@ fn apply_ship_input(
 }
 
 /// Tick down any cooldown component.
-fn tick_cooldown<T: Component<Mutability = bevy::ecs::component::Mutable> + DerefMut<Target = Cooldown>>(mut query: Query<&mut T>) {
+fn tick_cooldown<
+    T: Component<Mutability = bevy::ecs::component::Mutable> + DerefMut<Target = Cooldown>,
+>(
+    mut query: Query<&mut T>,
+) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     for mut cd in query.iter_mut() {
         if cd.remaining > 0.0 {
@@ -439,7 +443,6 @@ fn update_projectile_lifetime(
         }
     }
 }
-
 
 /// Tick mine arm timers and lifetime. Despawn expired mines.
 fn update_mine_lifetime(mut commands: Commands, mut query: Query<(Entity, &mut Mine)>) {

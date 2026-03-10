@@ -56,17 +56,29 @@ impl Gauge {
 /// Ship health points.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Deref, DerefMut)]
 pub struct Health(pub Gauge);
-impl Health { pub fn new(max: f32) -> Self { Self(Gauge::new(max)) } }
+impl Health {
+    pub fn new(max: f32) -> Self {
+        Self(Gauge::new(max))
+    }
+}
 
 /// Afterburner fuel.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Deref, DerefMut)]
 pub struct Fuel(pub Gauge);
-impl Fuel { pub fn new(max: f32) -> Self { Self(Gauge::new(max)) } }
+impl Fuel {
+    pub fn new(max: f32) -> Self {
+        Self(Gauge::new(max))
+    }
+}
 
 /// Autocannon ammunition.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Deref, DerefMut)]
 pub struct Ammo(pub Gauge);
-impl Ammo { pub fn new(max: f32) -> Self { Self(Gauge::new(max)) } }
+impl Ammo {
+    pub fn new(max: f32) -> Self {
+        Self(Gauge::new(max))
+    }
+}
 
 /// Projectile marker. Carries damage, owner, and remaining lifetime.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]

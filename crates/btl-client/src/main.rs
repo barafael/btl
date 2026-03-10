@@ -24,11 +24,18 @@ fn default_server_addr() -> SocketAddr {
 fn parse_config() -> (u64, SocketAddr) {
     use clap::Parser;
 
+    fn random_client_id() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64 ^ std::process::id() as u64)
+            .unwrap_or(1)
+    }
+
     #[derive(Parser, Debug)]
     #[command(name = "btl-client")]
     struct Cli {
-        /// Client ID (must be unique per client)
-        #[arg(short, long, default_value_t = 1)]
+        /// Client ID (must be unique per client; random if omitted)
+        #[arg(short, long, default_value_t = random_client_id())]
         id: u64,
 
         /// Server address
