@@ -28,15 +28,33 @@ pub fn eval_program(ops: &[Op], x: f32, y: f32, t: f32) -> f32 {
     let mut sp = 0usize;
     for &op in ops {
         match op {
-            Op::X => { stack[sp] = x; sp += 1; }
-            Op::Y => { stack[sp] = y; sp += 1; }
-            Op::T => { stack[sp] = t; sp += 1; }
-            Op::Num(n) => { stack[sp] = n; sp += 1; }
+            Op::X => {
+                stack[sp] = x;
+                sp += 1;
+            }
+            Op::Y => {
+                stack[sp] = y;
+                sp += 1;
+            }
+            Op::T => {
+                stack[sp] = t;
+                sp += 1;
+            }
+            Op::Num(n) => {
+                stack[sp] = n;
+                sp += 1;
+            }
             Op::Abs => stack[sp - 1] = stack[sp - 1].abs(),
             Op::Sqrt => stack[sp - 1] = stack[sp - 1].abs().sqrt(),
             Op::Sin => stack[sp - 1] = (stack[sp - 1] * std::f32::consts::PI).sin(),
-            Op::Add => { sp -= 1; stack[sp - 1] += stack[sp]; }
-            Op::Mult => { sp -= 1; stack[sp - 1] *= stack[sp]; }
+            Op::Add => {
+                sp -= 1;
+                stack[sp - 1] += stack[sp];
+            }
+            Op::Mult => {
+                sp -= 1;
+                stack[sp - 1] *= stack[sp];
+            }
             Op::Mix => {
                 sp -= 2;
                 let w = ((stack[sp + 1] + 1.0) * 0.5).clamp(0.0, 1.0);
@@ -74,13 +92,33 @@ impl Expr {
             Expr::Y => ops.push(Op::Y),
             Expr::T => ops.push(Op::T),
             Expr::Num(n) => ops.push(Op::Num(*n)),
-            Expr::Abs(e) => { e.compile(ops); ops.push(Op::Abs); }
-            Expr::Sqrt(e) => { e.compile(ops); ops.push(Op::Sqrt); }
-            Expr::Sin(e) => { e.compile(ops); ops.push(Op::Sin); }
-            Expr::Add(a, b) => { a.compile(ops); b.compile(ops); ops.push(Op::Add); }
-            Expr::Mult(a, b) => { a.compile(ops); b.compile(ops); ops.push(Op::Mult); }
+            Expr::Abs(e) => {
+                e.compile(ops);
+                ops.push(Op::Abs);
+            }
+            Expr::Sqrt(e) => {
+                e.compile(ops);
+                ops.push(Op::Sqrt);
+            }
+            Expr::Sin(e) => {
+                e.compile(ops);
+                ops.push(Op::Sin);
+            }
+            Expr::Add(a, b) => {
+                a.compile(ops);
+                b.compile(ops);
+                ops.push(Op::Add);
+            }
+            Expr::Mult(a, b) => {
+                a.compile(ops);
+                b.compile(ops);
+                ops.push(Op::Mult);
+            }
             Expr::Mix(a, b, c) => {
-                a.compile(ops); b.compile(ops); c.compile(ops); ops.push(Op::Mix);
+                a.compile(ops);
+                b.compile(ops);
+                c.compile(ops);
+                ops.push(Op::Mix);
             }
         }
     }
@@ -120,7 +158,10 @@ impl Expr {
         }
         cursor += W_SQRT;
         if roll < cursor {
-            return Expr::Sqrt(Box::new(Expr::Abs(Box::new(Self::generate(rng, depth - 1)))));
+            return Expr::Sqrt(Box::new(Expr::Abs(Box::new(Self::generate(
+                rng,
+                depth - 1,
+            )))));
         }
         cursor += W_SIN;
         if roll < cursor {

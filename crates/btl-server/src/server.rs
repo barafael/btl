@@ -10,10 +10,9 @@ use lightyear::webtransport::prelude::{Identity, server::WebTransportServerIo};
 use avian2d::prelude::*;
 use btl_protocol::*;
 use btl_shared::{
-    Asteroid, NebulaSeed, ShipBundle, generate_asteroid_layout,
-    AUTOCANNON_COOLDOWN, AUTOCANNON_DAMAGE, AUTOCANNON_LIFETIME, AUTOCANNON_SPEED,
-    MUZZLE_OFFSET, AMMO_COST,
-    MINE_COOLDOWN, MINE_DAMAGE, MINE_LIFETIME, MINE_ARM_TIME, MINE_DROP_SPEED, MINE_MAX_ACTIVE,
+    AMMO_COST, AUTOCANNON_COOLDOWN, AUTOCANNON_DAMAGE, AUTOCANNON_LIFETIME, AUTOCANNON_SPEED,
+    Asteroid, MINE_ARM_TIME, MINE_COOLDOWN, MINE_DAMAGE, MINE_DROP_SPEED, MINE_LIFETIME,
+    MINE_MAX_ACTIVE, MUZZLE_OFFSET, NebulaSeed, ShipBundle, generate_asteroid_layout,
 };
 
 /// Pending respawn entry
@@ -40,14 +39,17 @@ impl Plugin for ServerPlugin {
 
         app.init_resource::<RespawnQueue>();
         app.add_systems(Startup, (start_server, spawn_asteroids, spawn_nebula));
-        app.add_systems(FixedUpdate, (
-            server_fire_projectiles,
-            server_drop_mines,
-            btl_shared::check_projectile_hits,
-            btl_shared::check_mine_detonations,
-            despawn_dead_ships,
-            process_respawns,
-        ));
+        app.add_systems(
+            FixedUpdate,
+            (
+                server_fire_projectiles,
+                server_drop_mines,
+                btl_shared::check_projectile_hits,
+                btl_shared::check_mine_detonations,
+                despawn_dead_ships,
+                process_respawns,
+            ),
+        );
         app.add_observer(handle_new_client_link);
         app.add_observer(handle_client_connected);
     }
@@ -62,7 +64,11 @@ fn start_server(mut commands: Commands) {
 
     // Print cert hash for WASM clients (hex without colons)
     let cert_hash = certificate.certificate_chain().as_slice()[0].hash();
-    let hash_hex: String = cert_hash.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    let hash_hex: String = cert_hash
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     info!("Certificate hash (for browser clients): {hash_hex}");
 
     let netcode = NetcodeServer::new(NetcodeConfig {
@@ -90,11 +96,7 @@ fn handle_new_client_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
         trigger.entity
     );
     commands.entity(trigger.entity).insert((
-        ReplicationSender::new(
-            REPLICATION_INTERVAL,
-            SendUpdatesMode::SinceLastAck,
-            false,
-        ),
+        ReplicationSender::new(REPLICATION_INTERVAL, SendUpdatesMode::SinceLastAck, false),
         Name::from("Client"),
     ));
 }
@@ -137,20 +139,22 @@ fn handle_client_connected(
         trigger.entity
     );
 
-    let ship = commands.spawn((
-        ShipBundle::new(peer_id, team, spawn_pos),
-        // Replicate to all clients
-        Replicate::to_clients(NetworkTarget::All),
-        // Owning client gets prediction
-        PredictionTarget::to_clients(NetworkTarget::Single(peer_id)),
-        // Everyone else gets interpolation
-        InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer_id)),
-        // Mark ownership
-        ControlledBy {
-            owner: trigger.entity,
-            lifetime: Default::default(),
-        },
-    )).id();
+    let ship = commands
+        .spawn((
+            ShipBundle::new(peer_id, team, spawn_pos),
+            // Replicate to all clients
+            Replicate::to_clients(NetworkTarget::All),
+            // Owning client gets prediction
+            PredictionTarget::to_clients(NetworkTarget::Single(peer_id)),
+            // Everyone else gets interpolation
+            InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer_id)),
+            // Mark ownership
+            ControlledBy {
+                owner: trigger.entity,
+                lifetime: Default::default(),
+            },
+        ))
+        .id();
 
     info!("Spawned ship entity {ship:?} for {peer_id:?} at {spawn_pos}");
 }
@@ -178,10 +182,7 @@ fn spawn_nebula(mut commands: Commands) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0xDEAD_BEEF);
-    commands.spawn((
-        NebulaSeed(seed),
-        Replicate::to_clients(NetworkTarget::All),
-    ));
+    commands.spawn((NebulaSeed(seed), Replicate::to_clients(NetworkTarget::All)));
     info!("Spawned nebula with seed {seed:#X}");
 }
 
@@ -297,10 +298,7 @@ fn despawn_dead_ships(
 }
 
 /// Tick respawn timers and respawn ships when ready.
-fn process_respawns(
-    mut commands: Commands,
-    mut respawn_queue: ResMut<RespawnQueue>,
-) {
+fn process_respawns(mut commands: Commands, mut respawn_queue: ResMut<RespawnQueue>) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
 
     respawn_queue.0.retain_mut(|entry| {
@@ -311,16 +309,18 @@ fn process_respawns(
             let dist = 200.0;
             let spawn_pos = Vec2::new(dist * angle.cos(), dist * angle.sin());
 
-            let ship = commands.spawn((
-                ShipBundle::new(entry.peer_id, entry.team, spawn_pos),
-                Replicate::to_clients(NetworkTarget::All),
-                PredictionTarget::to_clients(NetworkTarget::Single(entry.peer_id)),
-                InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(entry.peer_id)),
-                ControlledBy {
-                    owner: entry.link_entity,
-                    lifetime: Default::default(),
-                },
-            )).id();
+            let ship = commands
+                .spawn((
+                    ShipBundle::new(entry.peer_id, entry.team, spawn_pos),
+                    Replicate::to_clients(NetworkTarget::All),
+                    PredictionTarget::to_clients(NetworkTarget::Single(entry.peer_id)),
+                    InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(entry.peer_id)),
+                    ControlledBy {
+                        owner: entry.link_entity,
+                        lifetime: Default::default(),
+                    },
+                ))
+                .id();
 
             info!("Respawned ship {ship:?} for {:?}", entry.peer_id);
             false // remove from queue

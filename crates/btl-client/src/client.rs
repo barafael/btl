@@ -1,12 +1,12 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use bevy::prelude::*;
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::prelude::*;
 use bevy::sprite::Anchor;
-use lightyear::prelude::client::*;
 use lightyear::prelude::client::input::InputSystems;
+use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::{ActionState, InputMarker};
 use lightyear::prelude::*;
 use lightyear::webtransport::prelude::client::WebTransportClientIo;
@@ -14,7 +14,10 @@ use lightyear::webtransport::prelude::client::WebTransportClientIo;
 use avian2d::prelude::*;
 
 use btl_protocol::*;
-use btl_shared::{Ammo, Asteroid, FrameInterpolate, Mine, Projectile, Position, Rotation, SHIP_MASS, SHIP_RADIUS, MINE_RADIUS, MINE_TRIGGER_RADIUS};
+use btl_shared::{
+    Ammo, Asteroid, FrameInterpolate, MINE_RADIUS, MINE_TRIGGER_RADIUS, Mine, Position, Projectile,
+    Rotation, SHIP_MASS, SHIP_RADIUS,
+};
 
 /// Marker for the locally controlled ship.
 #[derive(Component)]
@@ -101,12 +104,12 @@ struct RouteFollowing {
 fn create_interceptor_mesh(r: f32) -> Mesh {
     // Simple elongated hexagon — narrow and long (Y+ = forward)
     let verts: Vec<[f32; 3]> = vec![
-        [0.0, r * 1.6, 0.0],            // 0: nose tip
-        [r * 0.25, r * 0.3, 0.0],       // 1: right shoulder
-        [r * 0.3, -r * 0.6, 0.0],       // 2: right rear
-        [0.0, -r * 0.9, 0.0],           // 3: tail
-        [-r * 0.3, -r * 0.6, 0.0],      // 4: left rear
-        [-r * 0.25, r * 0.3, 0.0],      // 5: left shoulder
+        [0.0, r * 1.6, 0.0],       // 0: nose tip
+        [r * 0.25, r * 0.3, 0.0],  // 1: right shoulder
+        [r * 0.3, -r * 0.6, 0.0],  // 2: right rear
+        [0.0, -r * 0.9, 0.0],      // 3: tail
+        [-r * 0.3, -r * 0.6, 0.0], // 4: left rear
+        [-r * 0.25, r * 0.3, 0.0], // 5: left shoulder
     ];
 
     // Centroid for fan triangulation
@@ -125,7 +128,10 @@ fn create_interceptor_mesh(r: f32) -> Mesh {
         indices.push(((i + 1) % num + 1) as u16);
     }
 
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U16(indices));
     mesh
@@ -161,14 +167,24 @@ impl Plugin for ClientPlugin {
             (buffer_input, route_follow).in_set(InputSystems::WriteClientInputs),
         );
         app.add_observer(log_connected);
-        app.add_systems(Update, (
-            init_predicted_ships, init_interpolated_ships, init_asteroids,
-            init_projectiles, init_mines, update_projectile_visuals,
-            update_mine_visuals, update_gun_barrels,
-            route_planning_input, route_zoom,
-            camera_follow_local_ship, update_hud,
-            render_route_gizmos,
-        ));
+        app.add_systems(
+            Update,
+            (
+                init_predicted_ships,
+                init_interpolated_ships,
+                init_asteroids,
+                init_projectiles,
+                init_mines,
+                update_projectile_visuals,
+                update_mine_visuals,
+                update_gun_barrels,
+                route_planning_input,
+                route_zoom,
+                camera_follow_local_ship,
+                update_hud,
+                render_route_gizmos,
+            ),
+        );
         app.add_systems(Startup, spawn_hud);
     }
 }
@@ -254,12 +270,18 @@ fn buffer_input(
     .unwrap_or(std::f32::consts::FRAC_PI_2); // default: aim up
 
     // Map keyboard booleans to continuous values (0.0 or 1.0)
-    let rotate = match (keypress.pressed(KeyCode::KeyA), keypress.pressed(KeyCode::KeyD)) {
+    let rotate = match (
+        keypress.pressed(KeyCode::KeyA),
+        keypress.pressed(KeyCode::KeyD),
+    ) {
         (true, false) => 1.0,
         (false, true) => -1.0,
         _ => 0.0,
     };
-    let strafe = match (keypress.pressed(KeyCode::KeyQ), keypress.pressed(KeyCode::KeyE)) {
+    let strafe = match (
+        keypress.pressed(KeyCode::KeyQ),
+        keypress.pressed(KeyCode::KeyE),
+    ) {
         (true, false) => 1.0,
         (false, true) => -1.0,
         _ => 0.0,
@@ -267,12 +289,24 @@ fn buffer_input(
 
     for mut action_state in query.iter_mut() {
         action_state.0 = ShipInput {
-            thrust_forward: if keypress.pressed(KeyCode::KeyW) { 1.0 } else { 0.0 },
-            thrust_backward: if keypress.pressed(KeyCode::KeyS) { 1.0 } else { 0.0 },
+            thrust_forward: if keypress.pressed(KeyCode::KeyW) {
+                1.0
+            } else {
+                0.0
+            },
+            thrust_backward: if keypress.pressed(KeyCode::KeyS) {
+                1.0
+            } else {
+                0.0
+            },
             rotate,
             strafe,
             afterburner: keypress.pressed(KeyCode::ShiftLeft),
-            stabilize: if keypress.pressed(KeyCode::KeyR) { 1.0 } else { 0.0 },
+            stabilize: if keypress.pressed(KeyCode::KeyR) {
+                1.0
+            } else {
+                0.0
+            },
             fire: mouse_button.pressed(MouseButton::Left),
             drop_mine: keypress.just_pressed(KeyCode::KeyX),
             aim_angle,
@@ -347,9 +381,15 @@ fn init_predicted_ships(
                 InputMarker::<ShipInput>::default(),
                 LocalShip,
             ));
-            info!("Spawned local ship for {:?} on {:?} team", player_id.0, team);
+            info!(
+                "Spawned local ship for {:?} on {:?} team",
+                player_id.0, team
+            );
         } else {
-            info!("Spawned remote ship for {:?} on {:?} team", player_id.0, team);
+            info!(
+                "Spawned remote ship for {:?} on {:?} team",
+                player_id.0, team
+            );
         }
     }
 }
@@ -357,10 +397,7 @@ fn init_predicted_ships(
 /// Initialize rendering for interpolated (remote) ships.
 fn init_interpolated_ships(
     mut commands: Commands,
-    query: Query<
-        (Entity, &PlayerId, &Team),
-        (With<Interpolated>, Without<ShipInitialized>),
-    >,
+    query: Query<(Entity, &PlayerId, &Team), (With<Interpolated>, Without<ShipInitialized>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -392,7 +429,10 @@ fn init_interpolated_ships(
                 .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
         ));
 
-        info!("Spawned interpolated ship for {:?} on {:?} team", player_id.0, team);
+        info!(
+            "Spawned interpolated ship for {:?} on {:?} team",
+            player_id.0, team
+        );
     }
 }
 
@@ -441,8 +481,7 @@ fn init_projectiles(
                 custom_size: Some(Vec2::new(8.0, 2.0)),
                 ..default()
             },
-            Transform::from_xyz(pos.0.x, pos.0.y, 5.0)
-                .with_rotation(Quat::from_rotation_z(angle)),
+            Transform::from_xyz(pos.0.x, pos.0.y, 5.0).with_rotation(Quat::from_rotation_z(angle)),
             ProjectileInitialized,
         ));
     }
@@ -516,9 +555,28 @@ struct MineShadow {
 fn update_mine_visuals(
     mut commands: Commands,
     mines: Query<(Entity, &Mine, &Transform), With<MineInitialized>>,
-    mut cores: Query<(Entity, &MineCore, &mut Transform, &mut MeshMaterial2d<ColorMaterial>), (Without<MineInitialized>, Without<MineShadow>)>,
-    mut shadows: Query<(Entity, &MineShadow, &mut Transform), (Without<MineInitialized>, Without<MineCore>)>,
-    ships: Query<(&Transform, &Team), (With<ShipInitialized>, Without<MineInitialized>, Without<MineCore>, Without<MineShadow>)>,
+    mut cores: Query<
+        (
+            Entity,
+            &MineCore,
+            &mut Transform,
+            &mut MeshMaterial2d<ColorMaterial>,
+        ),
+        (Without<MineInitialized>, Without<MineShadow>),
+    >,
+    mut shadows: Query<
+        (Entity, &MineShadow, &mut Transform),
+        (Without<MineInitialized>, Without<MineCore>),
+    >,
+    ships: Query<
+        (&Transform, &Team),
+        (
+            With<ShipInitialized>,
+            Without<MineInitialized>,
+            Without<MineCore>,
+            Without<MineShadow>,
+        ),
+    >,
     time: Res<Time>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
@@ -558,7 +616,12 @@ fn update_mine_visuals(
                 core_tf.translation.z = mine_tf.translation.z + 0.1;
 
                 if let Some(mat) = materials.get_mut(&mat_handle.0) {
-                    mat.color = Color::LinearRgba(LinearRgba::new(intensity, 0.04 * pulse, 0.02, 0.2 + 0.2 * pulse));
+                    mat.color = Color::LinearRgba(LinearRgba::new(
+                        intensity,
+                        0.04 * pulse,
+                        0.02,
+                        0.2 + 0.2 * pulse,
+                    ));
                 }
             }
         }
@@ -602,44 +665,51 @@ const BAR_HEIGHT: f32 = 10.0;
 
 fn spawn_hud(mut commands: Commands) {
     // Bottom-left HUD panel
-    let panel = commands.spawn((
-        Node {
+    let panel = commands
+        .spawn((Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(12.0),
             left: Val::Px(12.0),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(4.0),
             ..default()
-        },
-    )).id();
+        },))
+        .id();
 
     // Health bar
-    let health_row = commands.spawn((
-        ChildOf(panel),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            ..default()
-        },
-    )).id();
+    let health_row = commands
+        .spawn((
+            ChildOf(panel),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                ..default()
+            },
+        ))
+        .id();
 
     commands.spawn((
         ChildOf(health_row),
         Text::new("HP"),
-        TextFont { font_size: 12.0, ..default() },
+        TextFont {
+            font_size: 12.0,
+            ..default()
+        },
         TextColor(Color::srgba(0.8, 0.3, 0.3, 0.9)),
     ));
 
-    let health_bg = commands.spawn((
-        ChildOf(health_row),
-        Node {
-            width: Val::Px(BAR_WIDTH),
-            height: Val::Px(BAR_HEIGHT),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.15, 0.05, 0.05, 0.8)),
-    )).id();
+    let health_bg = commands
+        .spawn((
+            ChildOf(health_row),
+            Node {
+                width: Val::Px(BAR_WIDTH),
+                height: Val::Px(BAR_HEIGHT),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.15, 0.05, 0.05, 0.8)),
+        ))
+        .id();
 
     commands.spawn((
         ChildOf(health_bg),
@@ -653,32 +723,39 @@ fn spawn_hud(mut commands: Commands) {
     ));
 
     // Fuel bar
-    let fuel_row = commands.spawn((
-        ChildOf(panel),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            ..default()
-        },
-    )).id();
+    let fuel_row = commands
+        .spawn((
+            ChildOf(panel),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                ..default()
+            },
+        ))
+        .id();
 
     commands.spawn((
         ChildOf(fuel_row),
         Text::new("FU"),
-        TextFont { font_size: 12.0, ..default() },
+        TextFont {
+            font_size: 12.0,
+            ..default()
+        },
         TextColor(Color::srgba(0.3, 0.5, 0.8, 0.9)),
     ));
 
-    let fuel_bg = commands.spawn((
-        ChildOf(fuel_row),
-        Node {
-            width: Val::Px(BAR_WIDTH),
-            height: Val::Px(BAR_HEIGHT),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.05, 0.05, 0.15, 0.8)),
-    )).id();
+    let fuel_bg = commands
+        .spawn((
+            ChildOf(fuel_row),
+            Node {
+                width: Val::Px(BAR_WIDTH),
+                height: Val::Px(BAR_HEIGHT),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.05, 0.05, 0.15, 0.8)),
+        ))
+        .id();
 
     commands.spawn((
         ChildOf(fuel_bg),
@@ -692,32 +769,39 @@ fn spawn_hud(mut commands: Commands) {
     ));
 
     // Ammo bar
-    let ammo_row = commands.spawn((
-        ChildOf(panel),
-        Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            ..default()
-        },
-    )).id();
+    let ammo_row = commands
+        .spawn((
+            ChildOf(panel),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                ..default()
+            },
+        ))
+        .id();
 
     commands.spawn((
         ChildOf(ammo_row),
         Text::new("AM"),
-        TextFont { font_size: 12.0, ..default() },
+        TextFont {
+            font_size: 12.0,
+            ..default()
+        },
         TextColor(Color::srgba(0.7, 0.6, 0.3, 0.9)),
     ));
 
-    let ammo_bg = commands.spawn((
-        ChildOf(ammo_row),
-        Node {
-            width: Val::Px(BAR_WIDTH),
-            height: Val::Px(BAR_HEIGHT),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.1, 0.08, 0.02, 0.8)),
-    )).id();
+    let ammo_bg = commands
+        .spawn((
+            ChildOf(ammo_row),
+            Node {
+                width: Val::Px(BAR_WIDTH),
+                height: Val::Px(BAR_HEIGHT),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.1, 0.08, 0.02, 0.8)),
+        ))
+        .id();
 
     commands.spawn((
         ChildOf(ammo_bg),
@@ -735,7 +819,10 @@ fn spawn_hud(mut commands: Commands) {
         ChildOf(panel),
         HudText,
         Text::new("SPD 0 | (0, 0)"),
-        TextFont { font_size: 12.0, ..default() },
+        TextFont {
+            font_size: 12.0,
+            ..default()
+        },
         TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)),
     ));
 }
@@ -743,11 +830,37 @@ fn spawn_hud(mut commands: Commands) {
 fn update_hud(
     ship_query: Query<(&Transform, &Health, &Fuel, &Ammo, &LinearVelocity), With<LocalShip>>,
     mut text_query: Query<&mut Text, With<HudText>>,
-    mut health_bar: Query<&mut Node, (With<HealthBarFill>, Without<FuelBarFill>, Without<AmmoBarFill>, Without<HudText>)>,
-    mut fuel_bar: Query<&mut Node, (With<FuelBarFill>, Without<HealthBarFill>, Without<AmmoBarFill>, Without<HudText>)>,
-    mut ammo_bar: Query<&mut Node, (With<AmmoBarFill>, Without<HealthBarFill>, Without<FuelBarFill>, Without<HudText>)>,
+    mut health_bar: Query<
+        &mut Node,
+        (
+            With<HealthBarFill>,
+            Without<FuelBarFill>,
+            Without<AmmoBarFill>,
+            Without<HudText>,
+        ),
+    >,
+    mut fuel_bar: Query<
+        &mut Node,
+        (
+            With<FuelBarFill>,
+            Without<HealthBarFill>,
+            Without<AmmoBarFill>,
+            Without<HudText>,
+        ),
+    >,
+    mut ammo_bar: Query<
+        &mut Node,
+        (
+            With<AmmoBarFill>,
+            Without<HealthBarFill>,
+            Without<FuelBarFill>,
+            Without<HudText>,
+        ),
+    >,
 ) {
-    let Ok((ship_tf, health, fuel, ammo, lin_vel)) = ship_query.single() else { return };
+    let Ok((ship_tf, health, fuel, ammo, lin_vel)) = ship_query.single() else {
+        return;
+    };
 
     if let Ok(mut text) = text_query.single_mut() {
         let x = ship_tf.translation.x as i32;
@@ -774,7 +887,9 @@ fn update_gun_barrels(
     local_ship: Query<(Entity, &Transform, &ActionState<ShipInput>), With<LocalShip>>,
     mut barrels: Query<(&ChildOf, &mut Transform), (With<GunBarrel>, Without<LocalShip>)>,
 ) {
-    let Ok((ship_entity, ship_tf, input)) = local_ship.single() else { return };
+    let Ok((ship_entity, ship_tf, input)) = local_ship.single() else {
+        return;
+    };
     let (_, _, ship_angle) = ship_tf.rotation.to_euler(EulerRot::XYZ);
     let local_angle = input.0.aim_angle - ship_angle;
 
@@ -802,29 +917,47 @@ fn camera_follow_local_ship(
 
 // --- Route planning systems ---
 
-use btl_shared::{SHIP_MAX_SPEED, SHIP_MAX_ANGULAR_SPEED, SHIP_STABILIZE_DECEL, SHIP_ANGULAR_DECEL, SHIP_THRUST};
+use btl_shared::{
+    SHIP_ANGULAR_DECEL, SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_SPEED, SHIP_STABILIZE_DECEL, SHIP_THRUST,
+};
 
 /// Normalize angle to [-PI, PI].
 fn wrap_angle(mut a: f32) -> f32 {
-    while a > std::f32::consts::PI { a -= std::f32::consts::TAU; }
-    while a < -std::f32::consts::PI { a += std::f32::consts::TAU; }
+    while a > std::f32::consts::PI {
+        a -= std::f32::consts::TAU;
+    }
+    while a < -std::f32::consts::PI {
+        a += std::f32::consts::TAU;
+    }
     a
 }
 
 /// Evaluate a Catmull-Rom spline through `points` at parameter `t` in [0, 1].
 fn catmull_rom_sample(points: &[Vec2], t: f32) -> Vec2 {
     let n = points.len();
-    if n == 0 { return Vec2::ZERO; }
-    if n == 1 { return points[0]; }
+    if n == 0 {
+        return Vec2::ZERO;
+    }
+    if n == 1 {
+        return points[0];
+    }
 
     let t_scaled = t * (n - 1) as f32;
     let i = (t_scaled as usize).min(n - 2);
     let local_t = t_scaled - i as f32;
 
-    let p0 = if i > 0 { points[i - 1] } else { 2.0 * points[0] - points[1] };
+    let p0 = if i > 0 {
+        points[i - 1]
+    } else {
+        2.0 * points[0] - points[1]
+    };
     let p1 = points[i];
     let p2 = points[i + 1];
-    let p3 = if i + 2 < n { points[i + 2] } else { 2.0 * points[n - 1] - points[n - 2] };
+    let p3 = if i + 2 < n {
+        points[i + 2]
+    } else {
+        2.0 * points[n - 1] - points[n - 2]
+    };
 
     let t2 = local_t * local_t;
     let t3 = t2 * local_t;
@@ -839,7 +972,9 @@ fn catmull_rom_sample(points: &[Vec2], t: f32) -> Vec2 {
 /// Returns true if the angle is acceptable.
 fn waypoint_angle_ok(waypoints: &[Vec2], candidate: Vec2) -> bool {
     let n = waypoints.len();
-    if n < 2 { return true; } // need at least 2 existing points to measure an angle
+    if n < 2 {
+        return true;
+    } // need at least 2 existing points to measure an angle
 
     let prev = waypoints[n - 1];
     let prev2 = waypoints[n - 2];
@@ -849,7 +984,9 @@ fn waypoint_angle_ok(waypoints: &[Vec2], candidate: Vec2) -> bool {
 
     let len_in = seg_in.length();
     let len_out = seg_out.length();
-    if len_in < 1.0 || len_out < 1.0 { return false; } // degenerate
+    if len_in < 1.0 || len_out < 1.0 {
+        return false;
+    } // degenerate
 
     // Angle between the two segments (0 = straight ahead, PI = U-turn)
     let cos_angle = seg_in.dot(seg_out) / (len_in * len_out);
@@ -905,20 +1042,25 @@ fn compute_curvatures(path: &[Vec2]) -> Vec<f32> {
 /// 3. End of path: speed ramps to zero.
 fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
     let n = curvatures.len();
-    if n == 0 { return vec![]; }
+    if n == 0 {
+        return vec![];
+    }
 
     let accel = SHIP_THRUST * 0.8; // effective acceleration (conservative)
     let decel = SHIP_STABILIZE_DECEL;
 
     // Curvature-based max speed at each point (with safety margin)
-    let mut profile: Vec<f32> = curvatures.iter().map(|&k| {
-        if k > 0.001 {
-            // v_safe = ω_max / κ, with 0.6 margin to allow correction room
-            (SHIP_MAX_ANGULAR_SPEED * 0.6 / k).min(SHIP_MAX_SPEED * 0.85)
-        } else {
-            SHIP_MAX_SPEED * 0.85
-        }
-    }).collect();
+    let mut profile: Vec<f32> = curvatures
+        .iter()
+        .map(|&k| {
+            if k > 0.001 {
+                // v_safe = ω_max / κ, with 0.6 margin to allow correction room
+                (SHIP_MAX_ANGULAR_SPEED * 0.6 / k).min(SHIP_MAX_SPEED * 0.85)
+            } else {
+                SHIP_MAX_SPEED * 0.85
+            }
+        })
+        .collect();
 
     // Last point: must stop
     profile[n - 1] = 0.0;
@@ -956,7 +1098,9 @@ fn compute_arc_lengths(path: &[Vec2]) -> Vec<f32> {
 /// Walks forward along `arc_lengths` from `from_idx` by `dist` units and returns the new index.
 fn advance_by_arc_length(arc_lengths: &[f32], from_idx: f32, dist: f32) -> f32 {
     let n = arc_lengths.len();
-    if n < 2 { return from_idx; }
+    if n < 2 {
+        return from_idx;
+    }
     let max_idx = (n - 1) as f32;
 
     // Arc length at from_idx (interpolated)
@@ -977,7 +1121,9 @@ fn advance_by_arc_length(arc_lengths: &[f32], from_idx: f32, dist: f32) -> f32 {
         }
     }
     // Interpolate within the segment
-    if lo == 0 { return 0.0; }
+    if lo == 0 {
+        return 0.0;
+    }
     let seg_start = arc_lengths[lo - 1];
     let seg_end = arc_lengths[lo];
     let seg_len = seg_end - seg_start;
@@ -1062,9 +1208,12 @@ fn route_planning_input(
     ship_query: Query<(Entity, &Transform), With<LocalShip>>,
     route_query: Query<Entity, With<RouteFollowing>>,
 ) {
-    let ctrl_held = keypress.pressed(KeyCode::ControlLeft) || keypress.pressed(KeyCode::ControlRight);
-    let ctrl_just_pressed = keypress.just_pressed(KeyCode::ControlLeft) || keypress.just_pressed(KeyCode::ControlRight);
-    let ctrl_just_released = keypress.just_released(KeyCode::ControlLeft) || keypress.just_released(KeyCode::ControlRight);
+    let ctrl_held =
+        keypress.pressed(KeyCode::ControlLeft) || keypress.pressed(KeyCode::ControlRight);
+    let ctrl_just_pressed =
+        keypress.just_pressed(KeyCode::ControlLeft) || keypress.just_pressed(KeyCode::ControlRight);
+    let ctrl_just_released = keypress.just_released(KeyCode::ControlLeft)
+        || keypress.just_released(KeyCode::ControlRight);
 
     if ctrl_just_pressed {
         for entity in route_query.iter() {
@@ -1146,7 +1295,8 @@ fn route_zoom(
     time: Res<Time>,
 ) {
     let dt = time.delta_secs();
-    planner.current_zoom += (planner.target_zoom - planner.current_zoom) * (ROUTE_ZOOM_SPEED * dt).min(1.0);
+    planner.current_zoom +=
+        (planner.target_zoom - planner.current_zoom) * (ROUTE_ZOOM_SPEED * dt).min(1.0);
 
     if (planner.current_zoom - planner.target_zoom).abs() < 0.001 {
         planner.current_zoom = planner.target_zoom;
@@ -1156,7 +1306,9 @@ fn route_zoom(
         return;
     }
 
-    let Ok(mut projection) = camera_query.single_mut() else { return };
+    let Ok(mut projection) = camera_query.single_mut() else {
+        return;
+    };
     if let Projection::Orthographic(ref mut ortho) = *projection {
         ortho.scale = planner.current_zoom;
     }
@@ -1178,14 +1330,20 @@ fn render_route_gizmos(
         return;
     };
 
-    if path.len() < 2 { return; }
+    if path.len() < 2 {
+        return;
+    }
 
     // Max curvature the ship can handle at cruise speed: κ_max = ω_max / v
     let cruise_speed = SHIP_MAX_SPEED * 0.6;
     let max_curvature = SHIP_MAX_ANGULAR_SPEED / cruise_speed;
 
     for i in 0..path.len() - 1 {
-        let k = if i < curvatures.len() { curvatures[i] } else { 0.0 };
+        let k = if i < curvatures.len() {
+            curvatures[i]
+        } else {
+            0.0
+        };
         let ratio = (k / max_curvature).clamp(0.0, 1.0);
 
         // Green → yellow → red based on curvature tightness
@@ -1260,7 +1418,13 @@ fn cross_track_error(path: &[Vec2], ship_pos: Vec2, progress: f32) -> f32 {
 fn route_follow(
     mut commands: Commands,
     mut ship_query: Query<
-        (Entity, &Transform, &LinearVelocity, &AngularVelocity, &mut RouteFollowing),
+        (
+            Entity,
+            &Transform,
+            &LinearVelocity,
+            &AngularVelocity,
+            &mut RouteFollowing,
+        ),
         With<LocalShip>,
     >,
     mut input_query: Query<&mut ActionState<ShipInput>, With<InputMarker<ShipInput>>>,
@@ -1291,7 +1455,10 @@ fn route_follow(
     if following.progress >= max_idx - 0.1 {
         commands.entity(entity).remove::<RouteFollowing>();
         for mut action_state in input_query.iter_mut() {
-            action_state.0 = ShipInput { stabilize: 1.0, ..default() };
+            action_state.0 = ShipInput {
+                stabilize: 1.0,
+                ..default()
+            };
         }
         return;
     }
@@ -1343,7 +1510,8 @@ fn route_follow(
         if len > 0.1 { d / len } else { tangent_ahead }
     };
     let blend = (cte.abs() / 80.0).clamp(0.0, 1.0);
-    let desired_dir = (tangent_ahead * (1.0 - blend) + pursuit_dir * blend).normalize_or(tangent_ahead);
+    let desired_dir =
+        (tangent_ahead * (1.0 - blend) + pursuit_dir * blend).normalize_or(tangent_ahead);
     let desired_angle = desired_dir.y.atan2(desired_dir.x);
 
     // 6. Heading error
@@ -1362,7 +1530,8 @@ fn route_follow(
     let omega_ff = speed * kappa_ahead * cross.signum();
 
     let omega_fb = heading_err.signum() * (2.0 * alpha * heading_err.abs()).sqrt();
-    let omega_desired = (omega_ff + omega_fb).clamp(-SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_ANGULAR_SPEED);
+    let omega_desired =
+        (omega_ff + omega_fb).clamp(-SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_ANGULAR_SPEED);
     let rotate = (omega_desired / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
 
     // 8. STRAFE PID CONTROL
@@ -1374,12 +1543,11 @@ fn route_follow(
     let cte_in_ship_right = cte * normal_in_ship;
     let integral_in_ship = cte_integral * normal_in_ship;
 
-    let k_p = 0.03;    // proportional gain
-    let k_i = 0.005;   // integral gain
-    let k_d = 0.05;    // derivative (velocity damping) gain
-    let strafe_cmd = k_p * cte_in_ship_right
-        + k_i * integral_in_ship
-        + k_d * lateral_vel * normal_in_ship;
+    let k_p = 0.03; // proportional gain
+    let k_i = 0.005; // integral gain
+    let k_d = 0.05; // derivative (velocity damping) gain
+    let strafe_cmd =
+        k_p * cte_in_ship_right + k_i * integral_in_ship + k_d * lateral_vel * normal_in_ship;
     let alignment_scale = (1.0 - (heading_err.abs() / std::f32::consts::FRAC_PI_4)).clamp(0.0, 1.0);
     let strafe = (strafe_cmd * alignment_scale).clamp(-1.0, 1.0);
 
@@ -1390,7 +1558,8 @@ fn route_follow(
     let idx_i = (progress as usize).min(speed_profile.len().saturating_sub(2));
     let idx_frac = progress - idx_i as f32;
     let target_speed = speed_profile[idx_i]
-        + idx_frac * (speed_profile[(idx_i + 1).min(speed_profile.len() - 1)] - speed_profile[idx_i]);
+        + idx_frac
+            * (speed_profile[(idx_i + 1).min(speed_profile.len() - 1)] - speed_profile[idx_i]);
 
     // 10. VELOCITY ALIGNMENT
     let vel_alignment = if speed > 5.0 {

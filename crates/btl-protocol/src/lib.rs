@@ -45,7 +45,11 @@ impl Health {
     }
 
     pub fn fraction(&self) -> f32 {
-        if self.max > 0.0 { self.current / self.max } else { 0.0 }
+        if self.max > 0.0 {
+            self.current / self.max
+        } else {
+            0.0
+        }
     }
 }
 
@@ -62,7 +66,11 @@ impl Fuel {
     }
 
     pub fn fraction(&self) -> f32 {
-        if self.max > 0.0 { self.current / self.max } else { 0.0 }
+        if self.max > 0.0 {
+            self.current / self.max
+        } else {
+            0.0
+        }
     }
 }
 
@@ -79,7 +87,11 @@ impl Ammo {
     }
 
     pub fn fraction(&self) -> f32 {
-        if self.max > 0.0 { self.current / self.max } else { 0.0 }
+        if self.max > 0.0 {
+            self.current / self.max
+        } else {
+            0.0
+        }
     }
 }
 

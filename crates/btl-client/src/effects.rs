@@ -11,15 +11,18 @@ impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EntityPositionCache>();
         app.insert_resource(EffectRng(0xEFFE_C700_DEAD_CAFE));
-        app.add_systems(Update, (
-            // detect_despawned_effects must read the cache BEFORE update_entity_cache clears it
-            detect_despawned_effects.before(update_entity_cache),
-            update_entity_cache,
-            spawn_muzzle_flashes,
-            spawn_mine_drop_flashes,
-            update_effect_particles,
-            update_flash_effects,
-        ));
+        app.add_systems(
+            Update,
+            (
+                // detect_despawned_effects must read the cache BEFORE update_entity_cache clears it
+                detect_despawned_effects.before(update_entity_cache),
+                update_entity_cache,
+                spawn_muzzle_flashes,
+                spawn_mine_drop_flashes,
+                update_effect_particles,
+                update_flash_effects,
+            ),
+        );
     }
 }
 
@@ -118,10 +121,7 @@ fn spawn_muzzle_flashes(
 }
 
 /// Spawn white flash when mines are dropped.
-fn spawn_mine_drop_flashes(
-    mut commands: Commands,
-    new_mines: Query<&Position, Added<Mine>>,
-) {
+fn spawn_mine_drop_flashes(mut commands: Commands, new_mines: Query<&Position, Added<Mine>>) {
     for pos in new_mines.iter() {
         commands.spawn((
             FlashEffect { lifetime: 0.06 },

@@ -41,9 +41,9 @@ const AB_LIFETIME_MULT: f32 = 1.8;
 const AB_SPEED_MULT: f32 = 1.3;
 const AB_SIZE_MULT: f32 = 1.6;
 // Afterburner color: intense blue-white HDR
-const COLOR_AB_HOT: Vec3 = Vec3::new(5.0, 5.0, 8.0);  // blue-white blaze
-const COLOR_AB_MID: Vec3 = Vec3::new(3.0, 2.0, 4.0);  // violet-blue
-const COLOR_AB_COOL: Vec3 = Vec3::new(1.5, 0.5, 0.8);  // fading purple
+const COLOR_AB_HOT: Vec3 = Vec3::new(5.0, 5.0, 8.0); // blue-white blaze
+const COLOR_AB_MID: Vec3 = Vec3::new(3.0, 2.0, 4.0); // violet-blue
+const COLOR_AB_COOL: Vec3 = Vec3::new(1.5, 0.5, 0.8); // fading purple
 // Fuel sputter threshold (fraction)
 const SPUTTER_THRESHOLD: f32 = 0.2;
 
@@ -95,7 +95,13 @@ impl Plugin for ParticlePlugin {
 fn spawn_thruster_particles(
     mut commands: Commands,
     ship_query: Query<
-        (&Transform, &ActionState<ShipInput>, &LinearVelocity, &AngularVelocity, &Fuel),
+        (
+            &Transform,
+            &ActionState<ShipInput>,
+            &LinearVelocity,
+            &AngularVelocity,
+            &Fuel,
+        ),
         (With<LocalShip>, With<InputMarker<ShipInput>>),
     >,
     time: Res<Time>,
@@ -119,106 +125,135 @@ fn spawn_thruster_particles(
     // Ship velocity for interpolating spawn positions across the frame
     let ship_vel = lin_vel.0;
 
-    let mut spawn_cone = |pos: Vec2, dir: Vec2, alpha: f32, spread: f32, count: usize, is_ab: bool| {
-        // Sputtering: skip entire bursts randomly when fuel is critically low
-        if sputtering && rng.next_f32() < 0.5 {
-            return;
-        }
-        for i in 0..count {
-            // Distribute spawn times evenly across the frame to avoid clumping
-            let frac = if count > 1 { i as f32 / count as f32 } else { rng.next_f32() };
-            // Offset spawn position back along ship's trajectory
-            let time_offset = frac * dt;
-            let pos_offset = pos - ship_vel * time_offset;
+    let mut spawn_cone =
+        |pos: Vec2, dir: Vec2, alpha: f32, spread: f32, count: usize, is_ab: bool| {
+            // Sputtering: skip entire bursts randomly when fuel is critically low
+            if sputtering && rng.next_f32() < 0.5 {
+                return;
+            }
+            for i in 0..count {
+                // Distribute spawn times evenly across the frame to avoid clumping
+                let frac = if count > 1 {
+                    i as f32 / count as f32
+                } else {
+                    rng.next_f32()
+                };
+                // Offset spawn position back along ship's trajectory
+                let time_offset = frac * dt;
+                let pos_offset = pos - ship_vel * time_offset;
 
-            // Random angle within cone
-            let angle = rng.next_signed() * spread;
-            let cos_a = angle.cos();
-            let sin_a = angle.sin();
-            let varied_dir = Vec2::new(
-                dir.x * cos_a - dir.y * sin_a,
-                dir.x * sin_a + dir.y * cos_a,
-            );
+                // Random angle within cone
+                let angle = rng.next_signed() * spread;
+                let cos_a = angle.cos();
+                let sin_a = angle.sin();
+                let varied_dir =
+                    Vec2::new(dir.x * cos_a - dir.y * sin_a, dir.x * sin_a + dir.y * cos_a);
 
-            // Decide if this is an ember (slow, long-lived spark)
-            let is_ember = rng.next_f32() < EMBER_CHANCE;
-            // Decide if this is a halo particle (wider, dimmer)
-            let is_halo = !is_ember && rng.next_f32() < HALO_CHANCE;
+                // Decide if this is an ember (slow, long-lived spark)
+                let is_ember = rng.next_f32() < EMBER_CHANCE;
+                // Decide if this is a halo particle (wider, dimmer)
+                let is_halo = !is_ember && rng.next_f32() < HALO_CHANCE;
 
-            let base_speed = PARTICLE_SPEED_MIN + rng.next_f32() * (PARTICLE_SPEED_MAX - PARTICLE_SPEED_MIN);
-            let ab_speed = if is_ab { AB_SPEED_MULT } else { 1.0 };
-            let speed = if is_ember { base_speed * EMBER_SPEED_MULT } else { base_speed * ab_speed };
+                let base_speed =
+                    PARTICLE_SPEED_MIN + rng.next_f32() * (PARTICLE_SPEED_MAX - PARTICLE_SPEED_MIN);
+                let ab_speed = if is_ab { AB_SPEED_MULT } else { 1.0 };
+                let speed = if is_ember {
+                    base_speed * EMBER_SPEED_MULT
+                } else {
+                    base_speed * ab_speed
+                };
 
-            // Slight positional jitter at nozzle
-            let jitter = rng.next_signed() * if is_halo { 3.0 } else { 1.5 };
-            let perp = Vec2::new(-dir.y, dir.x);
-            let spawn_pos = pos_offset + perp * jitter;
+                // Slight positional jitter at nozzle
+                let jitter = rng.next_signed() * if is_halo { 3.0 } else { 1.5 };
+                let perp = Vec2::new(-dir.y, dir.x);
+                let spawn_pos = pos_offset + perp * jitter;
 
-            // Velocity: particle direction + inherited ship velocity
-            let vel = varied_dir * speed + ship_vel * VELOCITY_INHERIT;
+                // Velocity: particle direction + inherited ship velocity
+                let vel = varied_dir * speed + ship_vel * VELOCITY_INHERIT;
 
-            let ab_life = if is_ab { AB_LIFETIME_MULT } else { 1.0 };
-            let lifetime = if is_ember {
-                PARTICLE_LIFETIME * EMBER_LIFETIME_MULT * ab_life * (0.8 + rng.next_f32() * 0.4)
-            } else {
-                PARTICLE_LIFETIME * ab_life * (0.8 + rng.next_f32() * 0.4)
-            };
+                let ab_life = if is_ab { AB_LIFETIME_MULT } else { 1.0 };
+                let lifetime = if is_ember {
+                    PARTICLE_LIFETIME * EMBER_LIFETIME_MULT * ab_life * (0.8 + rng.next_f32() * 0.4)
+                } else {
+                    PARTICLE_LIFETIME * ab_life * (0.8 + rng.next_f32() * 0.4)
+                };
 
-            let particle_alpha = if is_halo { alpha * HALO_ALPHA_MULT } else { alpha };
+                let particle_alpha = if is_halo {
+                    alpha * HALO_ALPHA_MULT
+                } else {
+                    alpha
+                };
 
-            // Size variation: randomize start size
-            let ab_size = if is_ab { AB_SIZE_MULT } else { 1.0 };
-            let size = if is_ember {
-                EMBER_SIZE * ab_size
-            } else if is_halo {
-                PARTICLE_SIZE_START * HALO_SIZE_MULT * ab_size * (0.8 + rng.next_f32() * 0.4)
-            } else {
-                PARTICLE_SIZE_START * ab_size * (0.6 + rng.next_f32() * 0.8)
-            };
+                // Size variation: randomize start size
+                let ab_size = if is_ab { AB_SIZE_MULT } else { 1.0 };
+                let size = if is_ember {
+                    EMBER_SIZE * ab_size
+                } else if is_halo {
+                    PARTICLE_SIZE_START * HALO_SIZE_MULT * ab_size * (0.8 + rng.next_f32() * 0.4)
+                } else {
+                    PARTICLE_SIZE_START * ab_size * (0.6 + rng.next_f32() * 0.8)
+                };
 
-            // Initial color: hot HDR white-blue at birth (afterburner is more intense blue)
-            let hot = if is_ab { COLOR_AB_HOT } else { COLOR_HOT };
-            let color = Color::LinearRgba(LinearRgba::new(
-                hot.x, hot.y, hot.z, particle_alpha,
-            ));
+                // Initial color: hot HDR white-blue at birth (afterburner is more intense blue)
+                let hot = if is_ab { COLOR_AB_HOT } else { COLOR_HOT };
+                let color = Color::LinearRgba(LinearRgba::new(hot.x, hot.y, hot.z, particle_alpha));
 
-            commands.spawn((
-                Particle {
-                    velocity: vel,
-                    lifetime: lifetime - time_offset,
-                    max_lifetime: lifetime,
-                    start_alpha: particle_alpha,
-                    is_halo,
-                    start_size: size,
-                    afterburner: is_ab,
-                },
-                Sprite {
-                    color,
-                    custom_size: Some(Vec2::splat(size)),
-                    ..default()
-                },
-                Transform::from_xyz(
-                    spawn_pos.x + vel.x * time_offset,
-                    spawn_pos.y + vel.y * time_offset,
-                    if is_halo { -2.0 } else { -1.0 },
-                ),
-            ));
-        }
+                commands.spawn((
+                    Particle {
+                        velocity: vel,
+                        lifetime: lifetime - time_offset,
+                        max_lifetime: lifetime,
+                        start_alpha: particle_alpha,
+                        is_halo,
+                        start_size: size,
+                        afterburner: is_ab,
+                    },
+                    Sprite {
+                        color,
+                        custom_size: Some(Vec2::splat(size)),
+                        ..default()
+                    },
+                    Transform::from_xyz(
+                        spawn_pos.x + vel.x * time_offset,
+                        spawn_pos.y + vel.y * time_offset,
+                        if is_halo { -2.0 } else { -1.0 },
+                    ),
+                ));
+            }
+        };
+
+    let base_rate = if afterburner_active {
+        PARTICLE_SPAWN_RATE * AB_SPAWN_RATE_MULT
+    } else {
+        PARTICLE_SPAWN_RATE
     };
-
-    let base_rate = if afterburner_active { PARTICLE_SPAWN_RATE * AB_SPAWN_RATE_MULT } else { PARTICLE_SPAWN_RATE };
     let count = (base_rate * dt).max(1.0) as usize;
     let speed = lin_vel.0.length();
-    let max_speed = if afterburner_active { btl_shared::SHIP_MAX_SPEED * 1.5 } else { btl_shared::SHIP_MAX_SPEED };
+    let max_speed = if afterburner_active {
+        btl_shared::SHIP_MAX_SPEED * 1.5
+    } else {
+        btl_shared::SHIP_MAX_SPEED
+    };
     let at_max_speed = speed >= max_speed - 0.5;
 
     // Main thruster (rear) — scale particles by throttle
     let fwd_mag = input.thrust_forward.abs();
     if fwd_mag > 0.05 && !(at_max_speed && lin_vel.0.dot(forward) > 0.0) {
         let scaled = (count as f32 * fwd_mag).max(1.0) as usize;
-        let alpha = if afterburner_active { 0.95 } else { 0.7 * fwd_mag.max(0.3) };
+        let alpha = if afterburner_active {
+            0.95
+        } else {
+            0.7 * fwd_mag.max(0.3)
+        };
         let base = ship_pos - forward * SHIP_RADIUS;
-        spawn_cone(base, -forward, alpha, CONE_HALF_ANGLE, scaled, afterburner_active);
+        spawn_cone(
+            base,
+            -forward,
+            alpha,
+            CONE_HALF_ANGLE,
+            scaled,
+            afterburner_active,
+        );
     }
 
     // Reverse thruster (front)
@@ -226,7 +261,14 @@ fn spawn_thruster_particles(
     if bwd_mag > 0.05 && !(at_max_speed && lin_vel.0.dot(-forward) > 0.0) {
         let scaled = (count as f32 * 0.5 * bwd_mag).max(1.0) as usize;
         let base = ship_pos + forward * SHIP_RADIUS * 1.2;
-        spawn_cone(base, forward, 0.5 * bwd_mag.max(0.3), CONE_HALF_ANGLE * 1.5, scaled, false);
+        spawn_cone(
+            base,
+            forward,
+            0.5 * bwd_mag.max(0.3),
+            CONE_HALF_ANGLE * 1.5,
+            scaled,
+            false,
+        );
     }
 
     let rcs_count = (count / 5).max(1);
@@ -282,11 +324,25 @@ fn spawn_thruster_particles(
 
         if fwd_component > 0.5 {
             let base = ship_pos + forward * SHIP_RADIUS * 1.2;
-            spawn_cone(base, forward, alpha, CONE_HALF_ANGLE * 1.5, stab_count, false);
+            spawn_cone(
+                base,
+                forward,
+                alpha,
+                CONE_HALF_ANGLE * 1.5,
+                stab_count,
+                false,
+            );
         }
         if fwd_component < -0.5 {
             let base = ship_pos - forward * SHIP_RADIUS;
-            spawn_cone(base, -forward, alpha, CONE_HALF_ANGLE * 1.5, stab_count, false);
+            spawn_cone(
+                base,
+                -forward,
+                alpha,
+                CONE_HALF_ANGLE * 1.5,
+                stab_count,
+                false,
+            );
         }
         if right_component > 0.5 {
             let fr = ship_pos + forward * SHIP_RADIUS * 0.5 + right * SHIP_RADIUS * 0.6;
@@ -355,11 +411,18 @@ fn update_particles(
         let alpha = particle.start_alpha * t * t;
 
         sprite.color = Color::LinearRgba(LinearRgba::new(
-            color_rgb.x, color_rgb.y, color_rgb.z, alpha,
+            color_rgb.x,
+            color_rgb.y,
+            color_rgb.z,
+            alpha,
         ));
 
         // Particles shrink from start to end size as they travel
-        let end_size = if particle.is_halo { PARTICLE_SIZE_END * HALO_SIZE_MULT } else { PARTICLE_SIZE_END };
+        let end_size = if particle.is_halo {
+            PARTICLE_SIZE_END * HALO_SIZE_MULT
+        } else {
+            PARTICLE_SIZE_END
+        };
         let size = particle.start_size * t + end_size * (1.0 - t);
         sprite.custom_size = Some(Vec2::splat(size));
     }

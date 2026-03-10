@@ -1,9 +1,6 @@
 use bevy::prelude::*;
 use btl_protocol::{PlayerId, Team};
-use btl_shared::{
-    MAP_RADIUS, OBJECTIVE_ZONE_RADIUS,
-    objective_zone_positions,
-};
+use btl_shared::{MAP_RADIUS, OBJECTIVE_ZONE_RADIUS, objective_zone_positions};
 
 use crate::client::LocalShip;
 
@@ -128,7 +125,9 @@ fn update_minimap_dots(
     camera_query: Query<(&Transform, &Projection), With<Camera2d>>,
     local_ship: Query<(), With<LocalShip>>,
 ) {
-    let Ok(root) = minimap_root.single() else { return };
+    let Ok(root) = minimap_root.single() else {
+        return;
+    };
     let center = MINIMAP_SIZE / 2.0;
 
     let mut existing: std::collections::HashSet<Entity> = std::collections::HashSet::new();

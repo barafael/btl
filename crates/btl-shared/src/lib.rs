@@ -1,15 +1,17 @@
 pub mod nebula;
 
 use avian2d::prelude::*;
+pub use avian2d::prelude::{Position, Rotation};
 use bevy::prelude::*;
 use lightyear::avian2d::plugin::{AvianReplicationMode, LightyearAvianPlugin};
+pub use lightyear::frame_interpolation::prelude::{FrameInterpolate, FrameInterpolationPlugin};
 use lightyear::prelude::input::native::ActionState;
 use lightyear::prelude::*;
-pub use avian2d::prelude::{Position, Rotation};
-pub use lightyear::frame_interpolation::prelude::{FrameInterpolate, FrameInterpolationPlugin};
 
 use btl_protocol::*;
-pub use btl_protocol::{Ammo, Asteroid, FireCooldown, Fuel, Health, Mine, MineCooldown, NebulaSeed, Projectile};
+pub use btl_protocol::{
+    Ammo, Asteroid, FireCooldown, Fuel, Health, Mine, MineCooldown, NebulaSeed, Projectile,
+};
 
 // --- Ship constants ---
 
@@ -115,8 +117,8 @@ pub fn tridrant_boundary_angles() -> [f32; 3] {
     let base = std::f32::consts::FRAC_PI_2; // bisector at 90°
     let half_sector = std::f32::consts::TAU / (TRIDRANT_COUNT as f32 * 2.0); // 60°
     [
-        base + half_sector,           // 150°
-        base + half_sector + std::f32::consts::TAU / 3.0, // 270°
+        base + half_sector,                                     // 150°
+        base + half_sector + std::f32::consts::TAU / 3.0,       // 270°
         base + half_sector + 2.0 * std::f32::consts::TAU / 3.0, // 30° (wraps)
     ]
 }
@@ -132,10 +134,10 @@ const ASTEROID_MAX_DIST: f32 = MAP_RADIUS - BOUNDARY_ZONE - 100.0;
 
 /// Size variants: (radius, weight) — weight controls spawn probability
 const ASTEROID_SIZES: &[(f32, f32)] = &[
-    (20.0, 0.35),   // small
-    (50.0, 0.30),   // medium
-    (100.0, 0.20),  // large
-    (200.0, 0.15),  // huge
+    (20.0, 0.35),  // small
+    (50.0, 0.30),  // medium
+    (100.0, 0.20), // large
+    (200.0, 0.15), // huge
 ];
 
 /// Simple seeded RNG (xorshift64) for deterministic asteroid placement.
@@ -267,17 +269,20 @@ impl Plugin for SharedPlugin {
         app.insert_resource(Gravity(Vec2::ZERO));
 
         // Shared systems run on both client (prediction) and server (authority)
-        app.add_systems(FixedUpdate, (
-            apply_ship_input,
-            update_fuel,
-            update_ammo,
-            tick_fire_cooldown,
-            tick_mine_cooldown,
-            update_projectile_lifetime,
-            check_projectile_asteroid_collisions,
-            update_mine_lifetime,
-            enforce_map_boundary,
-        ));
+        app.add_systems(
+            FixedUpdate,
+            (
+                apply_ship_input,
+                update_fuel,
+                update_ammo,
+                tick_fire_cooldown,
+                tick_mine_cooldown,
+                update_projectile_lifetime,
+                check_projectile_asteroid_collisions,
+                update_mine_lifetime,
+                enforce_map_boundary,
+            ),
+        );
 
         // Sync Position→Transform for non-physics entities (projectiles, mines)
         // Avian only syncs entities with RigidBody; these don't have one.
@@ -416,7 +421,11 @@ fn apply_ship_input(
 
         // Clamp linear speed
         let speed = lin_vel.0.length();
-        let max_speed = if afterburner_active { SHIP_MAX_SPEED * 1.5 } else { SHIP_MAX_SPEED };
+        let max_speed = if afterburner_active {
+            SHIP_MAX_SPEED * 1.5
+        } else {
+            SHIP_MAX_SPEED
+        };
         if speed > max_speed {
             lin_vel.0 = lin_vel.0.normalize() * max_speed;
         }
@@ -461,10 +470,7 @@ fn tick_mine_cooldown(mut query: Query<&mut MineCooldown>) {
 }
 
 /// Tick mine arm timers and lifetime. Despawn expired mines.
-fn update_mine_lifetime(
-    mut commands: Commands,
-    mut query: Query<(Entity, &mut Mine)>,
-) {
+fn update_mine_lifetime(mut commands: Commands, mut query: Query<(Entity, &mut Mine)>) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     for (entity, mut mine) in query.iter_mut() {
         if mine.arm_timer > 0.0 {
@@ -478,9 +484,7 @@ fn update_mine_lifetime(
 }
 
 /// Consume fuel while afterburner is active, regenerate when inactive.
-fn update_fuel(
-    mut query: Query<(&ActionState<ShipInput>, &mut Fuel)>,
-) {
+fn update_fuel(mut query: Query<(&ActionState<ShipInput>, &mut Fuel)>) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     for (input, mut fuel) in query.iter_mut() {
         if input.0.afterburner && fuel.current > 0.0 {
@@ -492,9 +496,7 @@ fn update_fuel(
 }
 
 /// Passive ammo regeneration.
-fn update_ammo(
-    mut query: Query<&mut Ammo>,
-) {
+fn update_ammo(mut query: Query<&mut Ammo>) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     for mut ammo in query.iter_mut() {
         if ammo.current < ammo.max {
@@ -521,9 +523,7 @@ fn check_projectile_asteroid_collisions(
 }
 
 /// Soft boundary: ships entering the boundary zone get slowed and reflected inward.
-fn enforce_map_boundary(
-    mut query: Query<(&Position, &mut LinearVelocity)>,
-) {
+fn enforce_map_boundary(mut query: Query<(&Position, &mut LinearVelocity)>) {
     let inner_radius = MAP_RADIUS - BOUNDARY_ZONE;
 
     for (pos, mut lin_vel) in query.iter_mut() {
@@ -590,9 +590,7 @@ pub fn check_mine_detonations(
 
 /// Sync Position→Transform for entities without RigidBody (projectiles, mines).
 /// Avian's PhysicsTransformPlugin is disabled and LightyearAvian only syncs physics entities.
-fn sync_position_to_transform(
-    mut query: Query<(&Position, &mut Transform), Without<RigidBody>>,
-) {
+fn sync_position_to_transform(mut query: Query<(&Position, &mut Transform), Without<RigidBody>>) {
     for (pos, mut transform) in query.iter_mut() {
         transform.translation.x = pos.0.x;
         transform.translation.y = pos.0.y;

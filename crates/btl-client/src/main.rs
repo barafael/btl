@@ -12,8 +12,8 @@ use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 use btl_protocol::SERVER_PORT;
 use btl_shared::{
-    MAP_RADIUS, OBJECTIVE_ZONE_RADIUS, SharedPlugin,
-    objective_zone_positions, tridrant_boundary_angles,
+    MAP_RADIUS, OBJECTIVE_ZONE_RADIUS, SharedPlugin, objective_zone_positions,
+    tridrant_boundary_angles,
 };
 
 fn default_server_addr() -> SocketAddr {
@@ -52,9 +52,15 @@ fn parse_config() -> (u64, SocketAddr, String) {
     for param in params.trim_start_matches('?').split('&') {
         if let Some((key, value)) = param.split_once('=') {
             match key {
-                "id" => { id = value.parse().unwrap_or(1); }
-                "server" => { server = value.parse().unwrap_or(server); }
-                "cert" => { cert = value.to_string(); }
+                "id" => {
+                    id = value.parse().unwrap_or(1);
+                }
+                "server" => {
+                    server = value.parse().unwrap_or(server);
+                }
+                "cert" => {
+                    cert = value.to_string();
+                }
                 _ => {}
             }
         }
@@ -79,21 +85,22 @@ fn main() {
     let (client_id, server_addr, cert_hash) = parse_config();
 
     App::new()
-        .add_plugins(DefaultPlugins
-            .set(LogPlugin {
-                filter: "wgpu=error,naga=warn,bevy_render=warn,bevy_ecs=warn,\
+        .add_plugins(
+            DefaultPlugins
+                .set(LogPlugin {
+                    filter: "wgpu=error,naga=warn,bevy_render=warn,bevy_ecs=warn,\
                          btl_client=debug,btl_shared=debug,btl_protocol=debug,\
                          lightyear=info"
-                    .into(),
-                ..default()
-            })
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    fit_canvas_to_parent: true,
+                        .into(),
+                    ..default()
+                })
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        fit_canvas_to_parent: true,
+                        ..default()
+                    }),
                     ..default()
                 }),
-                ..default()
-            }),
         )
         .insert_resource(ClearColor(Color::BLACK))
         .add_plugins(SharedPlugin)
@@ -107,7 +114,15 @@ fn main() {
         .add_plugins(effects::EffectsPlugin)
         .add_plugins(minimap::MinimapPlugin)
         .add_plugins(nebula::NebulaPlugin)
-        .add_systems(Startup, (setup_camera, spawn_boundary_ring, spawn_tridrant_markers, spawn_objective_zones))
+        .add_systems(
+            Startup,
+            (
+                setup_camera,
+                spawn_boundary_ring,
+                spawn_tridrant_markers,
+                spawn_objective_zones,
+            ),
+        )
         .run();
 }
 

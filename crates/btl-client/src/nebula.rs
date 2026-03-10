@@ -54,7 +54,9 @@ fn init_nebula(
         return;
     }
 
-    let Some(seed) = query.iter().next() else { return };
+    let Some(seed) = query.iter().next() else {
+        return;
+    };
 
     info!("Generating nebula from seed {:#X}", seed.0);
     let programs = nebula::generate_nebula(seed.0);
@@ -92,8 +94,7 @@ fn init_nebula(
     if let Ok(root) = minimap_root.single() {
         commands.spawn((
             ChildOf(root),
-            ImageNode::new(handle.clone())
-                .with_color(Color::srgba(0.5, 0.4, 0.8, MINIMAP_ALPHA)),
+            ImageNode::new(handle.clone()).with_color(Color::srgba(0.5, 0.4, 0.8, MINIMAP_ALPHA)),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),

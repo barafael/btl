@@ -78,8 +78,10 @@ fn update_star_positions(
 
         // Wrap stars so the field tiles infinitely around the camera
         let field = FIELD_HALF_SIZE * 2.0;
-        pos.x = ((pos.x - cam_pos.x + FIELD_HALF_SIZE).rem_euclid(field)) - FIELD_HALF_SIZE + cam_pos.x;
-        pos.y = ((pos.y - cam_pos.y + FIELD_HALF_SIZE).rem_euclid(field)) - FIELD_HALF_SIZE + cam_pos.y;
+        pos.x =
+            ((pos.x - cam_pos.x + FIELD_HALF_SIZE).rem_euclid(field)) - FIELD_HALF_SIZE + cam_pos.x;
+        pos.y =
+            ((pos.y - cam_pos.y + FIELD_HALF_SIZE).rem_euclid(field)) - FIELD_HALF_SIZE + cam_pos.y;
 
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
