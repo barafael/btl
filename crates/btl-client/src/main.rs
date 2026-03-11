@@ -24,7 +24,7 @@ fn default_server_addr() -> SocketAddr {
 }
 
 #[cfg(feature = "native")]
-fn parse_config() -> (u64, SocketAddr) {
+fn parse_config() -> (u64, SocketAddr, String) {
     use clap::Parser;
 
     fn random_client_id() -> u64 {
@@ -44,10 +44,14 @@ fn parse_config() -> (u64, SocketAddr) {
         /// Server address
         #[arg(short, long, default_value_t = default_server_addr())]
         server: SocketAddr,
+
+        /// Server certificate hash (hex, required for remote servers with self-signed certs)
+        #[arg(short, long, default_value = "")]
+        cert: String,
     }
 
     let cli = Cli::parse();
-    (cli.id, cli.server)
+    (cli.id, cli.server, cli.cert)
 }
 
 #[cfg(not(feature = "native"))]
@@ -82,20 +86,11 @@ fn parse_config() -> (u64, SocketAddr, String) {
     (id, server, cert)
 }
 
-#[cfg(feature = "native")]
-fn parse_config_full() -> (u64, SocketAddr, String) {
-    let (id, addr) = parse_config();
-    (id, addr, String::new())
-}
-
 fn main() {
     // Surface panics to browser console in WASM builds
     #[cfg(not(feature = "native"))]
     console_error_panic_hook::set_once();
 
-    #[cfg(feature = "native")]
-    let (client_id, server_addr, cert_hash) = parse_config_full();
-    #[cfg(not(feature = "native"))]
     let (client_id, server_addr, cert_hash) = parse_config();
 
     App::new()

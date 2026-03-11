@@ -155,6 +155,7 @@ fn handle_client_connected(
     trigger: On<Add, Connected>,
     query: Query<&RemoteId, With<ClientOf>>,
     existing_players: Query<&Team>,
+    scores_q: Query<&TeamScores>,
     mut commands: Commands,
 ) {
     let Ok(client_id) = query.get(trigger.entity) else {
@@ -177,11 +178,11 @@ fn handle_client_connected(
         Team::Blue
     };
 
-    // Spawn position based on team
-    let spawn_pos = match team {
-        Team::Red => Vec2::new(-50.0, 0.0),
-        Team::Blue => Vec2::new(50.0, 0.0),
-    };
+    let zone_control = scores_q
+        .single()
+        .map(|s| s.zone_control)
+        .unwrap_or_default();
+    let spawn_pos = pick_spawn_position(team, &zone_control, peer_id.to_bits());
 
     info!(
         "Client {peer_id:?} connected -> {team:?} team (link entity: {:?})",
@@ -393,17 +394,51 @@ fn despawn_dead_ships(
     }
 }
 
+/// Pick a spawn position near a zone controlled by the given team, or fallback to random.
+fn pick_spawn_position(team: Team, zone_control: &[u8; 3], peer_bits: u64) -> Vec2 {
+    let zones = objective_zone_positions();
+    let team_code = match team {
+        Team::Red => 1,
+        Team::Blue => 2,
+    };
+
+    // Collect zones controlled by this team
+    let owned: Vec<Vec2> = zone_control
+        .iter()
+        .enumerate()
+        .filter(|(_, ctrl)| **ctrl == team_code)
+        .map(|(i, _)| zones[i])
+        .collect();
+
+    // Pick one based on peer bits, spawn at edge of zone
+    let angle = (peer_bits as f32 * 2.3) % std::f32::consts::TAU;
+    if !owned.is_empty() {
+        let idx = (peer_bits as usize) % owned.len();
+        let center = owned[idx];
+        center + Vec2::new(angle.cos(), angle.sin()) * (OBJECTIVE_ZONE_RADIUS * 0.5)
+    } else {
+        // No zones controlled — spawn at random position
+        Vec2::new(200.0 * angle.cos(), 200.0 * angle.sin())
+    }
+}
+
 /// Tick respawn timers and respawn ships when ready.
-fn process_respawns(mut commands: Commands, mut respawn_queue: ResMut<RespawnQueue>) {
+fn process_respawns(
+    mut commands: Commands,
+    mut respawn_queue: ResMut<RespawnQueue>,
+    scores_q: Query<&TeamScores>,
+) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let zone_control = scores_q
+        .single()
+        .map(|s| s.zone_control)
+        .unwrap_or_default();
 
     respawn_queue.0.retain_mut(|entry| {
         entry.timer -= dt;
         if entry.timer <= 0.0 {
-            // Respawn at a random-ish position based on team
-            let angle = (entry.peer_id.to_bits() as f32 * 2.3) % std::f32::consts::TAU;
-            let dist = 200.0;
-            let spawn_pos = Vec2::new(dist * angle.cos(), dist * angle.sin());
+            let spawn_pos =
+                pick_spawn_position(entry.team, &zone_control, entry.peer_id.to_bits());
 
             let ship = commands
                 .spawn((
