@@ -14,9 +14,10 @@ use std::ops::DerefMut;
 
 use btl_protocol::*;
 pub use btl_protocol::{
-    Ammo, Asteroid, Cloak, Drone, DroneKind, FireCooldown, Fuel, Health, Mine, MineCooldown,
-    NebulaSeed, Projectile, ProjectileKind, RailgunCharge, ShipClass, Torpedo, TurretState,
-    Turrets,
+    Ammo, Asteroid, Cloak, DamageFlash, Drone, DroneKind, FireCooldown, Fuel, Health, Mine,
+    MineCooldown, NebulaSeed, ObjectiveKind, Projectile, ProjectileKind, RailgunCharge,
+    RailgunTurretState, ShipClass, SpawnProtection, Torpedo, TurretState, Turrets,
+    ZoneDrone, ZoneRailgun, ZoneShield,
 };
 
 // --- Ship constants ---
@@ -279,6 +280,65 @@ pub const OBJECTIVE_ZONE_RADIUS: f32 = 300.0;
 pub const ZONE_SCORE_RATE: f32 = 1.0;
 /// Score needed to win
 pub const SCORE_LIMIT: f32 = 100.0;
+/// Seconds to show victory screen before restart countdown.
+pub const ROUND_END_DISPLAY_TIME: f32 = 5.0;
+/// Seconds for restart countdown after victory display.
+pub const ROUND_RESTART_COUNTDOWN: f32 = 3.0;
+/// Base capture rate per second (progress per second with 1 ship)
+/// Diminishing returns: 1x, 1.5x, 1.8x, 2.0x for 1-4 ships
+pub const CAPTURE_RATE: f32 = 0.1;
+
+/// Spawn invulnerability duration (seconds)
+pub const SPAWN_PROTECTION_DURATION: f32 = 3.0;
+/// Duration of white damage flash on hit (seconds)
+pub const DAMAGE_FLASH_DURATION: f32 = 0.12;
+
+/// Zone benefit: HP regen per second when inside a friendly zone
+pub const ZONE_HP_REGEN: f32 = 5.0;
+/// Zone benefit: ammo/fuel regen multiplier (added on top of passive)
+pub const ZONE_REGEN_MULT: f32 = 2.0;
+
+// --- Objective defense constants ---
+
+/// Which defense each zone index gets.
+pub const OBJECTIVE_KINDS: [ObjectiveKind; 3] = [
+    ObjectiveKind::Factory,
+    ObjectiveKind::Railgun,
+    ObjectiveKind::Powerplant,
+];
+
+// Factory defense drones
+pub const FACTORY_LASER_DRONES: usize = 7;
+pub const FACTORY_KAMIKAZE_DRONES: usize = 4;
+pub const FACTORY_DRONE_HEALTH: f32 = 15.0;
+pub const FACTORY_DRONE_SPEED: f32 = 180.0;
+pub const FACTORY_DRONE_ORBIT_RADIUS: f32 = 200.0;
+pub const FACTORY_DRONE_AGGRO_RANGE: f32 = 500.0;
+pub const FACTORY_DRONE_LASER_RANGE: f32 = 250.0;
+pub const FACTORY_DRONE_LASER_DPS: f32 = 8.0;
+pub const FACTORY_DRONE_KAMIKAZE_DAMAGE: f32 = 30.0;
+pub const FACTORY_DRONE_RESPAWN_TIME: f32 = 10.0;
+
+// Railgun turret
+pub const ZONE_RAILGUN_RANGE: f32 = 800.0;
+pub const ZONE_RAILGUN_SLEW_RATE: f32 = 1.5;
+pub const ZONE_RAILGUN_CHARGE_TIME: f32 = 2.0;
+pub const ZONE_RAILGUN_LOCK_TIME: f32 = 0.5;
+pub const ZONE_RAILGUN_DAMAGE: f32 = 60.0;
+pub const ZONE_RAILGUN_COOLDOWN: f32 = 4.0;
+pub const ZONE_RAILGUN_PROJECTILE_SPEED: f32 = 3000.0;
+pub const ZONE_RAILGUN_PROJECTILE_LIFETIME: f32 = 1.5;
+
+// Powerplant shield
+pub const ZONE_SHIELD_RADIUS: f32 = 350.0;
+pub const ZONE_SHIELD_LASER_MULT: f32 = 0.3;
+
+/// Collision damage constants
+pub const COLLISION_DAMAGE_VELOCITY_THRESHOLD: f32 = 100.0;
+/// Damage per unit of relative velocity above threshold
+pub const COLLISION_DAMAGE_PER_VELOCITY: f32 = 0.15;
+/// Extra damage multiplier on the faster ship in a ship-ship collision
+pub const COLLISION_FASTER_SHIP_MULT: f32 = 1.2;
 
 /// Returns the center positions of the 3 objective zones.
 /// Tridrant bisectors are at 90°, 210°, 330° (first one points up).
@@ -331,6 +391,11 @@ const ASTEROID_SIZES: &[(f32, f32)] = &[
     (200.0, 0.15), // huge
 ];
 
+/// Largest asteroid collision radius (matches the last entry in ASTEROID_SIZES).
+pub const MAX_ASTEROID_RADIUS: f32 = 200.0;
+/// Largest ship collision radius across all classes.
+pub const MAX_SHIP_RADIUS: f32 = GUNSHIP_RADIUS;
+
 /// Deterministic asteroid layout. Returns (position, radius, rotation_radians).
 pub fn generate_asteroid_layout() -> Vec<(Vec2, f32, f32)> {
     let mut rng = rng::Rng::new(ASTEROID_SEED);
@@ -362,6 +427,104 @@ pub fn generate_asteroid_layout() -> Vec<(Vec2, f32, f32)> {
     }
 
     asteroids
+}
+
+// ============================================================
+// Spatial hash grid
+// ============================================================
+
+/// World-space cell size. Large enough that most entities fit in one cell; small
+/// enough that typical projectile searches only touch a handful of cells.
+const SPATIAL_CELL: f32 = 256.0;
+
+/// A lightweight spatial hash that maps grid cells to lists of copied items.
+/// Cleared and repopulated each tick by `rebuild_collision_grids`.
+pub struct SpatialHash<T> {
+    cells: std::collections::HashMap<(i32, i32), Vec<T>>,
+}
+
+impl<T> Default for SpatialHash<T> {
+    fn default() -> Self {
+        SpatialHash { cells: std::collections::HashMap::new() }
+    }
+}
+
+impl<T: Copy> SpatialHash<T> {
+    fn cell_key(pos: Vec2) -> (i32, i32) {
+        (
+            (pos.x / SPATIAL_CELL).floor() as i32,
+            (pos.y / SPATIAL_CELL).floor() as i32,
+        )
+    }
+
+    /// Retain allocated memory but remove all entries.
+    pub fn clear(&mut self) {
+        for v in self.cells.values_mut() {
+            v.clear();
+        }
+    }
+
+    /// Insert an item at a world-space position.
+    pub fn insert(&mut self, pos: Vec2, item: T) {
+        self.cells.entry(Self::cell_key(pos)).or_default().push(item);
+    }
+
+    /// Call `f` for every item stored in cells that overlap the circle (pos, radius).
+    /// Does **not** do final distance filtering — callers handle that.
+    pub fn for_each_candidate(&self, pos: Vec2, radius: f32, mut f: impl FnMut(T)) {
+        let r = (radius / SPATIAL_CELL).ceil() as i32 + 1;
+        let (cx, cy) = Self::cell_key(pos);
+        for dx in -r..=r {
+            for dy in -r..=r {
+                if let Some(items) = self.cells.get(&(cx + dx, cy + dy)) {
+                    for &item in items {
+                        f(item);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Collision look-up grids rebuilt once per fixed tick before collision systems run.
+/// Only stores (Entity, Vec2) or (Vec2, f32) — enough to filter candidates before
+/// doing per-component lookups via `Query::get_mut`.
+#[derive(Resource, Default)]
+pub struct CollisionGrids {
+    /// Ships that have `Health`: (entity, world pos).
+    pub ships: SpatialHash<(Entity, Vec2)>,
+    /// Asteroids: (world pos, radius).
+    pub asteroids: SpatialHash<(Vec2, f32)>,
+    /// Player drones (`Drone` component): (entity, world pos).
+    pub drones: SpatialHash<(Entity, Vec2)>,
+    /// Zone defense drones (`ZoneDrone` component): (entity, world pos).
+    pub zone_drones: SpatialHash<(Entity, Vec2)>,
+}
+
+/// Repopulate all collision grids. Must run before every collision system each tick.
+pub fn rebuild_collision_grids(
+    mut grids: ResMut<CollisionGrids>,
+    ships: Query<(Entity, &Position), With<Health>>,
+    asteroids: Query<(&Position, &Asteroid)>,
+    drones: Query<(Entity, &Position), With<Drone>>,
+    zone_drones: Query<(Entity, &Position), With<ZoneDrone>>,
+) {
+    grids.ships.clear();
+    for (entity, pos) in ships.iter() {
+        grids.ships.insert(pos.0, (entity, pos.0));
+    }
+    grids.asteroids.clear();
+    for (pos, ast) in asteroids.iter() {
+        grids.asteroids.insert(pos.0, (pos.0, ast.radius));
+    }
+    grids.drones.clear();
+    for (entity, pos) in drones.iter() {
+        grids.drones.insert(pos.0, (entity, pos.0));
+    }
+    grids.zone_drones.clear();
+    for (entity, pos) in zone_drones.iter() {
+        grids.zone_drones.insert(pos.0, (entity, pos.0));
+    }
 }
 
 // --- Shared plugin ---
@@ -401,6 +564,8 @@ impl Plugin for SharedPlugin {
             .add_prediction()
             .add_should_rollback(|_: &RailgunCharge, _: &RailgunCharge| false);
         app.register_component::<Drone>();
+        app.register_component::<SpawnProtection>().add_prediction();
+        app.register_component::<DamageFlash>().add_prediction();
 
         // Register Avian physics components for prediction/interpolation/rollback
         // (requires lightyear_avian2d for Diffable trait impls)
@@ -452,6 +617,9 @@ impl Plugin for SharedPlugin {
         // No gravity in space
         app.insert_resource(Gravity(Vec2::ZERO));
 
+        app.init_resource::<CollisionGrids>();
+        app.add_systems(FixedUpdate, rebuild_collision_grids);
+
         // Shared systems run on both client (prediction) and server (authority)
         app.add_systems(
             FixedUpdate,
@@ -462,11 +630,13 @@ impl Plugin for SharedPlugin {
                 tick_cooldown::<FireCooldown>,
                 tick_cooldown::<MineCooldown>,
                 update_projectile_lifetime,
-                check_projectile_asteroid_collisions,
+                check_projectile_asteroid_collisions.after(rebuild_collision_grids),
                 update_mine_lifetime,
                 update_torpedo_lifetime,
                 update_drone_positions,
                 enforce_map_boundary,
+                tick_spawn_protection,
+                tick_damage_flash,
             ),
         );
 
@@ -504,6 +674,8 @@ pub struct ShipBundle {
     pub turrets: Turrets,
     pub cloak: Cloak,
     pub railgun_charge: RailgunCharge,
+    pub spawn_protection: SpawnProtection,
+    pub damage_flash: DamageFlash,
     pub last_damaged_by: LastDamagedBy,
 }
 
@@ -594,6 +766,8 @@ impl ShipBundle {
                 cooldown: 0.0,
             },
             railgun_charge: RailgunCharge::default(),
+            spawn_protection: SpawnProtection { remaining: SPAWN_PROTECTION_DURATION },
+            damage_flash: DamageFlash::default(),
             last_damaged_by: LastDamagedBy::default(),
         }
     }
@@ -746,7 +920,7 @@ fn update_projectile_lifetime(
 fn update_mine_lifetime(
     mut commands: Commands,
     mut mines: Query<(Entity, &mut Mine, &Position)>,
-    mut ships: Query<(&Position, &Team, &mut Health, &mut LastDamagedBy)>,
+    mut ships: Query<(&Position, &Team, &SpawnProtection, &mut Health, &mut DamageFlash, &mut LastDamagedBy)>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let trigger_dist_sq = MINE_TRIGGER_RADIUS * MINE_TRIGGER_RADIUS;
@@ -757,14 +931,14 @@ fn update_mine_lifetime(
         }
         mine.lifetime -= dt;
         if mine.lifetime <= 0.0 {
-            // Detonate on expiry — damage nearby enemies
-            for (ship_pos, ship_team, mut health, mut last_hit) in ships.iter_mut() {
-                if *ship_team == mine.owner_team {
+            for (ship_pos, ship_team, sp, mut health, mut flash, mut last_hit) in ships.iter_mut() {
+                if *ship_team == mine.owner_team || sp.remaining > 0.0 {
                     continue;
                 }
                 if (mine_pos.0 - ship_pos.0).length_squared() < trigger_dist_sq {
                     health.current = (health.current - mine.damage).max(0.0);
                     last_hit.attacker = Some(mine.owner);
+                    flash.timer = DAMAGE_FLASH_DURATION;
                 }
             }
             commands.entity(entity).try_despawn();
@@ -808,12 +982,19 @@ fn update_ammo(mut query: Query<(&ShipClass, &mut Ammo)>) {
 fn check_projectile_asteroid_collisions(
     mut commands: Commands,
     projectiles: Query<(Entity, &Position), With<Projectile>>,
-    asteroids: Query<(&Position, &Asteroid)>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Vec2, f32)>>,
 ) {
     for (proj_entity, proj_pos) in projectiles.iter() {
-        for (ast_pos, asteroid) in asteroids.iter() {
-            let hit_dist = PROJECTILE_RADIUS + asteroid.radius;
-            if (proj_pos.0 - ast_pos.0).length_squared() < hit_dist * hit_dist {
+        candidates.clear();
+        grids.asteroids.for_each_candidate(
+            proj_pos.0,
+            PROJECTILE_RADIUS + MAX_ASTEROID_RADIUS,
+            |e| candidates.push(e),
+        );
+        for &(ast_pos, ast_radius) in candidates.iter() {
+            let hit_dist = PROJECTILE_RADIUS + ast_radius;
+            if (proj_pos.0 - ast_pos).length_squared() < hit_dist * hit_dist {
                 commands.entity(proj_entity).try_despawn();
                 break;
             }
@@ -856,27 +1037,28 @@ fn enforce_map_boundary(mut query: Query<(&Position, &mut LinearVelocity)>) {
 pub fn check_mine_detonations(
     mut commands: Commands,
     mines: Query<(Entity, &Mine, &Position)>,
-    mut ships: Query<(Entity, &Position, &Team, &mut Health, &mut LastDamagedBy)>,
+    mut ships: Query<(Entity, &Position, &Team, &SpawnProtection, &mut Health, &mut DamageFlash, &mut LastDamagedBy)>,
 ) {
     let trigger_dist_sq = MINE_TRIGGER_RADIUS * MINE_TRIGGER_RADIUS;
 
     for (mine_entity, mine, mine_pos) in mines.iter() {
-        // Skip unarmed mines
         if mine.arm_timer > 0.0 {
             continue;
         }
 
         let mut detonated = false;
-        for (_ship_entity, ship_pos, ship_team, mut health, mut last_hit) in ships.iter_mut() {
-            // No friendly fire — skip same team
+        for (_ship_entity, ship_pos, ship_team, sp, mut health, mut flash, mut last_hit) in ships.iter_mut() {
             if *ship_team == mine.owner_team {
                 continue;
             }
 
             let delta = mine_pos.0 - ship_pos.0;
             if delta.length_squared() < trigger_dist_sq {
-                health.current = (health.current - mine.damage).max(0.0);
-                last_hit.attacker = Some(mine.owner);
+                if sp.remaining <= 0.0 {
+                    health.current = (health.current - mine.damage).max(0.0);
+                    last_hit.attacker = Some(mine.owner);
+                    flash.timer = DAMAGE_FLASH_DURATION;
+                }
                 detonated = true;
                 break;
             }
@@ -884,6 +1066,26 @@ pub fn check_mine_detonations(
 
         if detonated {
             commands.entity(mine_entity).try_despawn();
+        }
+    }
+}
+
+/// Tick down spawn protection timer.
+fn tick_spawn_protection(mut query: Query<&mut SpawnProtection>) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for mut sp in query.iter_mut() {
+        if sp.remaining > 0.0 {
+            sp.remaining = (sp.remaining - dt).max(0.0);
+        }
+    }
+}
+
+/// Tick down damage flash timer.
+fn tick_damage_flash(mut query: Query<&mut DamageFlash>) {
+    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    for mut flash in query.iter_mut() {
+        if flash.timer > 0.0 {
+            flash.timer = (flash.timer - dt).max(0.0);
         }
     }
 }
@@ -899,6 +1101,17 @@ fn sync_position_to_transform(mut query: Query<(&Position, &mut Transform), With
 
 /// Check projectile-ship overlaps and apply damage. Despawn projectile on hit.
 /// Uses simple circle-circle test (no physics engine for projectiles).
+/// Helper: get ship collision radius from class.
+pub fn ship_radius(class: &ShipClass) -> f32 {
+    match class {
+        ShipClass::Interceptor => SHIP_RADIUS,
+        ShipClass::Gunship => GUNSHIP_RADIUS,
+        ShipClass::TorpedoBoat => TBOAT_RADIUS,
+        ShipClass::Sniper => SNIPER_RADIUS,
+        ShipClass::DroneCommander => DCOMMANDER_RADIUS,
+    }
+}
+
 pub fn check_projectile_hits(
     mut commands: Commands,
     projectiles: Query<(Entity, &Projectile, &Position, Option<&ProjectileKind>)>,
@@ -907,9 +1120,13 @@ pub fn check_projectile_hits(
         &Position,
         &Team,
         &ShipClass,
+        &SpawnProtection,
         &mut Health,
+        &mut DamageFlash,
         &mut LastDamagedBy,
     )>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
     for (proj_entity, proj, proj_pos, proj_kind) in projectiles.iter() {
         let proj_radius = match proj_kind.copied().unwrap_or_default() {
@@ -919,25 +1136,29 @@ pub fn check_projectile_hits(
             ProjectileKind::Railgun => RAILGUN_PROJECTILE_RADIUS,
         };
 
-        for (_ship_entity, ship_pos, ship_team, ship_class, mut health, mut last_hit) in
-            ships.iter_mut()
-        {
+        candidates.clear();
+        grids.ships.for_each_candidate(
+            proj_pos.0,
+            proj_radius + MAX_SHIP_RADIUS,
+            |e| candidates.push(e),
+        );
+
+        for &(ship_entity, _) in candidates.iter() {
+            let Ok((_, ship_pos, ship_team, ship_class, sp, mut health, mut flash, mut last_hit)) =
+                ships.get_mut(ship_entity)
+            else {
+                continue;
+            };
             if *ship_team == proj.owner_team {
                 continue;
             }
-
-            let ship_radius = match ship_class {
-                ShipClass::Interceptor => SHIP_RADIUS,
-                ShipClass::Gunship => GUNSHIP_RADIUS,
-                ShipClass::TorpedoBoat => TBOAT_RADIUS,
-                ShipClass::Sniper => SNIPER_RADIUS,
-                ShipClass::DroneCommander => DCOMMANDER_RADIUS,
-            };
-            let hit_dist = proj_radius + ship_radius;
-            let delta = proj_pos.0 - ship_pos.0;
-            if delta.length_squared() < hit_dist * hit_dist {
-                health.current = (health.current - proj.damage).max(0.0);
-                last_hit.attacker = Some(proj.owner);
+            let hit_dist = proj_radius + ship_radius(ship_class);
+            if (proj_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
+                if sp.remaining <= 0.0 {
+                    health.current = (health.current - proj.damage).max(0.0);
+                    last_hit.attacker = Some(proj.owner);
+                    flash.timer = DAMAGE_FLASH_DURATION;
+                }
                 commands.entity(proj_entity).try_despawn();
                 break;
             }
@@ -949,7 +1170,8 @@ pub fn check_projectile_hits(
 pub fn check_projectile_asteroid_hits(
     mut commands: Commands,
     projectiles: Query<(Entity, &Position, Option<&ProjectileKind>), With<Projectile>>,
-    asteroids: Query<(&Position, &Asteroid)>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Vec2, f32)>>,
 ) {
     for (proj_entity, proj_pos, proj_kind) in projectiles.iter() {
         let proj_radius = match proj_kind.copied().unwrap_or_default() {
@@ -958,10 +1180,15 @@ pub fn check_projectile_asteroid_hits(
             ProjectileKind::Turret => TURRET_PROJECTILE_RADIUS,
             ProjectileKind::Railgun => RAILGUN_PROJECTILE_RADIUS,
         };
-        for (ast_pos, ast) in asteroids.iter() {
-            let hit_dist = proj_radius + ast.radius;
-            let delta = proj_pos.0 - ast_pos.0;
-            if delta.length_squared() < hit_dist * hit_dist {
+        candidates.clear();
+        grids.asteroids.for_each_candidate(
+            proj_pos.0,
+            proj_radius + MAX_ASTEROID_RADIUS,
+            |e| candidates.push(e),
+        );
+        for &(ast_pos, ast_radius) in candidates.iter() {
+            let hit_dist = proj_radius + ast_radius;
+            if (proj_pos.0 - ast_pos).length_squared() < hit_dist * hit_dist {
                 commands.entity(proj_entity).try_despawn();
                 break;
             }
@@ -1041,18 +1268,67 @@ pub fn check_projectile_drone_hits(
     mut commands: Commands,
     projectiles: Query<(Entity, &Projectile, &Position)>,
     mut drones: Query<(Entity, &mut Drone, &Position)>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
+    const HIT_DIST_SQ: f32 = (PROJECTILE_RADIUS + DRONE_RADIUS) * (PROJECTILE_RADIUS + DRONE_RADIUS);
     for (proj_entity, proj, proj_pos) in projectiles.iter() {
-        for (drone_entity, mut drone, drone_pos) in drones.iter_mut() {
-            let hit_dist = PROJECTILE_RADIUS + DRONE_RADIUS;
-            if (proj_pos.0 - drone_pos.0).length_squared() < hit_dist * hit_dist {
-                drone.health -= proj.damage;
-                commands.entity(proj_entity).try_despawn();
-                if drone.health <= 0.0 {
-                    commands.entity(drone_entity).try_despawn();
-                }
-                break;
+        candidates.clear();
+        grids.drones.for_each_candidate(
+            proj_pos.0,
+            PROJECTILE_RADIUS + DRONE_RADIUS,
+            |e| candidates.push(e),
+        );
+        for &(drone_entity, cached_pos) in candidates.iter() {
+            if (proj_pos.0 - cached_pos).length_squared() >= HIT_DIST_SQ {
+                continue;
             }
+            let Ok((_, mut drone, _)) = drones.get_mut(drone_entity) else {
+                continue;
+            };
+            drone.health -= proj.damage;
+            commands.entity(proj_entity).try_despawn();
+            if drone.health <= 0.0 {
+                commands.entity(drone_entity).try_despawn();
+            }
+            break;
+        }
+    }
+}
+
+/// Projectile hits on zone defense drones.
+pub fn check_projectile_zone_drone_hits(
+    mut commands: Commands,
+    projectiles: Query<(Entity, &Projectile, &Position)>,
+    mut drones: Query<(Entity, &mut ZoneDrone, &Position)>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
+) {
+    const HIT_DIST_SQ: f32 = (PROJECTILE_RADIUS + DRONE_RADIUS) * (PROJECTILE_RADIUS + DRONE_RADIUS);
+    for (proj_entity, proj, proj_pos) in projectiles.iter() {
+        candidates.clear();
+        grids.zone_drones.for_each_candidate(
+            proj_pos.0,
+            PROJECTILE_RADIUS + DRONE_RADIUS,
+            |e| candidates.push(e),
+        );
+        for &(drone_entity, cached_pos) in candidates.iter() {
+            if (proj_pos.0 - cached_pos).length_squared() >= HIT_DIST_SQ {
+                continue;
+            }
+            let Ok((_, mut drone, _)) = drones.get_mut(drone_entity) else {
+                continue;
+            };
+            // Don't friendly-fire zone drones
+            if proj.owner_team == drone.team {
+                continue;
+            }
+            drone.health -= proj.damage;
+            commands.entity(proj_entity).try_despawn();
+            if drone.health <= 0.0 {
+                commands.entity(drone_entity).try_despawn();
+            }
+            break;
         }
     }
 }
@@ -1060,14 +1336,16 @@ pub fn check_projectile_drone_hits(
 /// Laser drones fire erratic pulsed beams at nearest enemy within range.
 pub fn drone_laser_damage(
     drones: Query<(Entity, &Drone, &Position)>,
-    mut ships: Query<(Entity, &Position, &Team, &mut Health, &mut LastDamagedBy)>,
+    mut ships: Query<(Entity, &Position, &Team, &SpawnProtection, &mut Health, &mut DamageFlash, &mut LastDamagedBy)>,
     time: Res<Time>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let range_sq = DRONE_LASER_RANGE * DRONE_LASER_RANGE;
     let elapsed = time.elapsed_secs();
 
-    let mut hits: Vec<(Entity, f32, PeerId)> = Vec::new();
+    let mut hits: Vec<(Entity, f32, PeerId)> = Vec::with_capacity(8);
 
     for (drone_entity, drone, drone_pos) in drones.iter() {
         if drone.kind != DroneKind::Laser {
@@ -1078,8 +1356,13 @@ pub fn drone_laser_damage(
         }
         let mut best_dist_sq = range_sq;
         let mut best_target = None;
-        for (entity, ship_pos, ship_team, _, _) in ships.iter() {
-            if *ship_team == drone.owner_team {
+        candidates.clear();
+        grids.ships.for_each_candidate(drone_pos.0, DRONE_LASER_RANGE, |e| candidates.push(e));
+        for &(ship_entity, _) in candidates.iter() {
+            let Ok((entity, ship_pos, ship_team, sp, _, _, _)) = ships.get(ship_entity) else {
+                continue;
+            };
+            if *ship_team == drone.owner_team || sp.remaining > 0.0 {
                 continue;
             }
             let dist_sq = (drone_pos.0 - ship_pos.0).length_squared();
@@ -1096,9 +1379,10 @@ pub fn drone_laser_damage(
     }
 
     for (entity, damage, owner) in hits {
-        if let Ok((_, _, _, mut health, mut last_hit)) = ships.get_mut(entity) {
+        if let Ok((_, _, _, _, mut health, mut flash, mut last_hit)) = ships.get_mut(entity) {
             health.current = (health.current - damage).max(0.0);
             last_hit.attacker = Some(owner);
+            flash.timer = DAMAGE_FLASH_DURATION;
         }
     }
 }
@@ -1111,29 +1395,40 @@ pub fn drone_kamikaze_impact(
         &Position,
         &Team,
         &ShipClass,
+        &SpawnProtection,
         &mut Health,
+        &mut DamageFlash,
         &mut LastDamagedBy,
     )>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
     for (drone_entity, drone, drone_pos) in drones.iter() {
         if drone.kind != DroneKind::Kamikaze {
             continue;
         }
-        for (ship_pos, ship_team, ship_class, mut health, mut last_hit) in ships.iter_mut() {
+        candidates.clear();
+        grids.ships.for_each_candidate(
+            drone_pos.0,
+            DRONE_RADIUS + MAX_SHIP_RADIUS,
+            |e| candidates.push(e),
+        );
+        for &(ship_entity, _) in candidates.iter() {
+            let Ok((ship_pos, ship_team, ship_class, sp, mut health, mut flash, mut last_hit)) =
+                ships.get_mut(ship_entity)
+            else {
+                continue;
+            };
             if *ship_team == drone.owner_team {
                 continue;
             }
-            let ship_radius = match ship_class {
-                ShipClass::Interceptor => SHIP_RADIUS,
-                ShipClass::Gunship => GUNSHIP_RADIUS,
-                ShipClass::TorpedoBoat => TBOAT_RADIUS,
-                ShipClass::Sniper => SNIPER_RADIUS,
-                ShipClass::DroneCommander => DCOMMANDER_RADIUS,
-            };
-            let hit_dist = DRONE_RADIUS + ship_radius;
+            let hit_dist = DRONE_RADIUS + ship_radius(ship_class);
             if (drone_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
-                health.current = (health.current - DRONE_KAMIKAZE_DAMAGE).max(0.0);
-                last_hit.attacker = Some(drone.owner);
+                if sp.remaining <= 0.0 {
+                    health.current = (health.current - DRONE_KAMIKAZE_DAMAGE).max(0.0);
+                    last_hit.attacker = Some(drone.owner);
+                    flash.timer = DAMAGE_FLASH_DURATION;
+                }
                 commands.entity(drone_entity).try_despawn();
                 break;
             }
@@ -1149,26 +1444,37 @@ pub fn check_torpedo_hits(
         &Position,
         &Team,
         &ShipClass,
+        &SpawnProtection,
         &mut Health,
+        &mut DamageFlash,
         &mut LastDamagedBy,
     )>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
     for (torp_entity, torp, torp_pos) in torpedoes.iter() {
-        for (ship_pos, ship_team, ship_class, mut health, mut last_hit) in ships.iter_mut() {
+        candidates.clear();
+        grids.ships.for_each_candidate(
+            torp_pos.0,
+            TORPEDO_RADIUS + MAX_SHIP_RADIUS,
+            |e| candidates.push(e),
+        );
+        for &(ship_entity, _) in candidates.iter() {
+            let Ok((ship_pos, ship_team, ship_class, sp, mut health, mut flash, mut last_hit)) =
+                ships.get_mut(ship_entity)
+            else {
+                continue;
+            };
             if *ship_team == torp.owner_team {
                 continue;
             }
-            let ship_radius = match ship_class {
-                ShipClass::Interceptor => SHIP_RADIUS,
-                ShipClass::Gunship => GUNSHIP_RADIUS,
-                ShipClass::TorpedoBoat => TBOAT_RADIUS,
-                ShipClass::Sniper => SNIPER_RADIUS,
-                ShipClass::DroneCommander => DCOMMANDER_RADIUS,
-            };
-            let hit_dist = TORPEDO_RADIUS + ship_radius;
+            let hit_dist = TORPEDO_RADIUS + ship_radius(ship_class);
             if (torp_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
-                health.current = (health.current - torp.damage).max(0.0);
-                last_hit.attacker = Some(torp.owner);
+                if sp.remaining <= 0.0 {
+                    health.current = (health.current - torp.damage).max(0.0);
+                    last_hit.attacker = Some(torp.owner);
+                    flash.timer = DAMAGE_FLASH_DURATION;
+                }
                 commands.entity(torp_entity).try_despawn();
                 break;
             }
