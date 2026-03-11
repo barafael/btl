@@ -437,14 +437,12 @@ impl Plugin for SharedPlugin {
             ..default()
         });
 
-        // Avian physics (disable plugins that lightyear manages, and the debug
-        // renderer so the server can run headlessly without a GPU)
+        // Avian physics (disable plugins that lightyear manages)
         app.add_plugins(
             PhysicsPlugins::default()
                 .build()
                 .disable::<PhysicsTransformPlugin>()
-                .disable::<PhysicsInterpolationPlugin>()
-                .disable::<avian2d::debug_render::PhysicsDebugPlugin>(),
+                .disable::<PhysicsInterpolationPlugin>(),
         );
 
         // Frame interpolation for smooth rendering between physics ticks

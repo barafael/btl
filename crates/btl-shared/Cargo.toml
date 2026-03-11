@@ -20,5 +20,4 @@ avian2d = { version = "0.5.0", default-features = false, features = [
     "parry-f32",
     "default-collider",
     "serialize",
-    "debug-plugin",
 ] }
