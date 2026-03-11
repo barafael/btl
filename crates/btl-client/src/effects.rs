@@ -321,8 +321,8 @@ fn spawn_ship_explosion(commands: &mut Commands, pos: Vec2, team: &Team, rng: &m
     // Expanding fireball ring
     let ring_count = 24;
     for i in 0..ring_count {
-        let angle = (i as f32 / ring_count as f32) * std::f32::consts::TAU
-            + (rng.next_f32() - 0.5) * 0.3;
+        let angle =
+            (i as f32 / ring_count as f32) * std::f32::consts::TAU + (rng.next_f32() - 0.5) * 0.3;
         let speed = 200.0 + rng.next_f32() * 200.0;
         let vel = Vec2::new(angle.cos(), angle.sin()) * speed;
         commands.spawn((

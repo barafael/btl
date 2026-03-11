@@ -156,7 +156,10 @@ fn create_flame_cone_mesh(length: f32, half_width: f32) -> Mesh {
         [-half_width, length, 0.0],
         [half_width, length, 0.0],
     ];
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U16(vec![0, 1, 2]));
     mesh
@@ -172,9 +175,12 @@ pub fn spawn_thruster_nozzles(
     let defs = nozzle_defs();
     let cone_mesh = meshes.add(create_flame_cone_mesh(RCS_CONE_LENGTH, RCS_CONE_HALF_WIDTH));
 
-    let cone_material = materials.add(ColorMaterial::from(Color::LinearRgba(
-        LinearRgba::new(RCS_CONE_COLOR.x, RCS_CONE_COLOR.y, RCS_CONE_COLOR.z, 0.7),
-    )));
+    let cone_material = materials.add(ColorMaterial::from(Color::LinearRgba(LinearRgba::new(
+        RCS_CONE_COLOR.x,
+        RCS_CONE_COLOR.y,
+        RCS_CONE_COLOR.z,
+        0.7,
+    ))));
 
     for (i, def) in defs.iter().enumerate() {
         // Rotation to align +Y with exhaust direction
@@ -255,12 +261,7 @@ impl Plugin for ParticlePlugin {
 fn spawn_main_thruster_particles(
     mut commands: Commands,
     ship_query: Query<
-        (
-            &Transform,
-            &ActionState<ShipInput>,
-            &LinearVelocity,
-            &Fuel,
-        ),
+        (&Transform, &ActionState<ShipInput>, &LinearVelocity, &Fuel),
         (With<LocalShip>, With<InputMarker<ShipInput>>),
     >,
     time: Res<Time>,
@@ -522,8 +523,7 @@ fn update_particles(
             let vel_speed = particle.velocity.length();
             if vel_speed > 50.0 {
                 let stretch = (vel_speed / 400.0).clamp(1.5, 4.0);
-                let vel_angle =
-                    f32::atan2(-particle.velocity.x, particle.velocity.y);
+                let vel_angle = f32::atan2(-particle.velocity.x, particle.velocity.y);
                 transform.rotation = Quat::from_rotation_z(vel_angle);
                 sprite.custom_size = Some(Vec2::new(size * 0.4, size * stretch));
             } else {

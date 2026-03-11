@@ -222,6 +222,21 @@ pub struct MineCooldown(pub Cooldown);
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct NebulaSeed(pub u64);
 
+/// Tracks who last dealt damage to this ship (for kill attribution).
+/// Server-only — not replicated.
+#[derive(Component, Clone, Debug, Default)]
+pub struct LastDamagedBy {
+    pub attacker: Option<PeerId>,
+}
+
+/// Round state: 0=Playing, 1=Red won, 2=Blue won.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, Copy)]
+pub enum RoundState {
+    #[default]
+    Playing,
+    Won(Team),
+}
+
 /// King-of-the-hill team scores. Replicated to all clients.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct TeamScores {
@@ -229,6 +244,8 @@ pub struct TeamScores {
     pub blue: f32,
     /// Per-zone controller: 0=contested/empty, 1=Red, 2=Blue
     pub zone_control: [u8; 3],
+    /// Current round state
+    pub round_state: RoundState,
 }
 
 // --- Inputs ---

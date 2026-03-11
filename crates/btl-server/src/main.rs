@@ -9,11 +9,11 @@ use btl_shared::SharedPlugin;
 
 fn main() {
     App::new()
-        .add_plugins(MinimalPlugins.set(
-            bevy::app::ScheduleRunnerPlugin::run_loop(
+        .add_plugins(
+            MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
                 std::time::Duration::from_secs_f64(1.0 / FIXED_TIMESTEP_HZ),
-            ),
-        ))
+            )),
+        )
         .add_plugins(TransformPlugin)
         .add_plugins(LogPlugin {
             filter: "btl_server=debug,btl_shared=debug,btl_protocol=debug,\

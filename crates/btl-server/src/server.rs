@@ -14,18 +14,18 @@ use btl_shared::{
     Asteroid, CLOAK_COOLDOWN, CLOAK_DURATION, Cloak, DEFENSE_TURRET_COOLDOWN,
     DEFENSE_TURRET_DAMAGE, DEFENSE_TURRET_FIRE_TOLERANCE, DEFENSE_TURRET_LIFETIME,
     DEFENSE_TURRET_MOUNTS, DEFENSE_TURRET_RANGE, DEFENSE_TURRET_SLEW_RATE, DEFENSE_TURRET_SPEED,
-    DRONE_AGGRO_RANGE, DRONE_DETONATION_DAMAGE, DRONE_DETONATION_RADIUS,
-    DRONE_KAMIKAZE_HEALTH, DRONE_KAMIKAZE_SPEED, DRONE_LASER_COUNT,
-    DRONE_LASER_HEALTH, DRONE_LASER_RANGE, DRONE_MAX_COUNT, DRONE_ORBIT_RADIUS, DRONE_RESPAWN_TIME,
-    DRONE_SPEED, Drone, HEAVY_CANNON_AMMO_COST, HEAVY_CANNON_COOLDOWN, HEAVY_CANNON_DAMAGE,
-    HEAVY_CANNON_LIFETIME, HEAVY_CANNON_SPEED, HEAVY_MUZZLE_OFFSET, LASER_AMMO_COST, LASER_DPS,
-    LASER_RANGE, MINE_ARM_TIME, MINE_COOLDOWN, MINE_DAMAGE, MINE_DROP_SPEED, MINE_LIFETIME,
-    MINE_MAX_ACTIVE, MUZZLE_OFFSET, NebulaSeed, OBJECTIVE_ZONE_RADIUS, PULSE_COOLDOWN,
-    PULSE_RADIUS, RAILGUN_CHARGE_TIME, RAILGUN_COOLDOWN, RAILGUN_DAMAGE, RAILGUN_LIFETIME,
-    RAILGUN_SPEED, RailgunCharge, SCORE_LIMIT, ShipBundle, TBOAT_RADIUS, TORPEDO_COOLDOWN,
-    TORPEDO_DAMAGE, TORPEDO_LIFETIME, TORPEDO_MAX_ACTIVE, TORPEDO_MUZZLE_OFFSET, TORPEDO_SPEED,
-    TORPEDO_TURN_RATE, TURRET_COOLDOWN, TURRET_DAMAGE, TURRET_FIRE_TOLERANCE, TURRET_LIFETIME,
-    TURRET_MOUNTS, TURRET_RANGE, TURRET_SLEW_RATE, TURRET_SPEED, Torpedo, ZONE_SCORE_RATE,
+    DRONE_AGGRO_RANGE, DRONE_DETONATION_DAMAGE, DRONE_DETONATION_RADIUS, DRONE_KAMIKAZE_HEALTH,
+    DRONE_KAMIKAZE_SPEED, DRONE_LASER_COUNT, DRONE_LASER_HEALTH, DRONE_LASER_RANGE,
+    DRONE_MAX_COUNT, DRONE_ORBIT_RADIUS, DRONE_RESPAWN_TIME, DRONE_SPEED, Drone,
+    HEAVY_CANNON_AMMO_COST, HEAVY_CANNON_COOLDOWN, HEAVY_CANNON_DAMAGE, HEAVY_CANNON_LIFETIME,
+    HEAVY_CANNON_SPEED, HEAVY_MUZZLE_OFFSET, LASER_AMMO_COST, LASER_DPS, LASER_RANGE,
+    MINE_ARM_TIME, MINE_COOLDOWN, MINE_DAMAGE, MINE_DROP_SPEED, MINE_LIFETIME, MINE_MAX_ACTIVE,
+    MUZZLE_OFFSET, NebulaSeed, OBJECTIVE_ZONE_RADIUS, PULSE_COOLDOWN, PULSE_RADIUS,
+    RAILGUN_CHARGE_TIME, RAILGUN_COOLDOWN, RAILGUN_DAMAGE, RAILGUN_LIFETIME, RAILGUN_SPEED,
+    RailgunCharge, SCORE_LIMIT, ShipBundle, TBOAT_RADIUS, TORPEDO_COOLDOWN, TORPEDO_DAMAGE,
+    TORPEDO_LIFETIME, TORPEDO_MAX_ACTIVE, TORPEDO_MUZZLE_OFFSET, TORPEDO_SPEED, TORPEDO_TURN_RATE,
+    TURRET_COOLDOWN, TURRET_DAMAGE, TURRET_FIRE_TOLERANCE, TURRET_LIFETIME, TURRET_MOUNTS,
+    TURRET_RANGE, TURRET_SLEW_RATE, TURRET_SPEED, Torpedo, ZONE_SCORE_RATE,
     generate_asteroid_layout, objective_zone_positions, ray_circle_intersect,
 };
 
@@ -59,7 +59,10 @@ impl Plugin for ServerPlugin {
         });
 
         app.init_resource::<RespawnQueue>();
-        app.add_systems(Startup, (start_server, spawn_asteroids, spawn_nebula, spawn_scores));
+        app.add_systems(
+            Startup,
+            (start_server, spawn_asteroids, spawn_nebula, spawn_scores),
+        );
         app.add_systems(
             FixedUpdate,
             (
@@ -357,12 +360,27 @@ fn server_drop_mines(
 /// Despawn ships that have reached 0 HP and queue them for respawn.
 fn despawn_dead_ships(
     mut commands: Commands,
-    query: Query<(Entity, &Health, &PlayerId, &Team, &ShipClass, &ControlledBy)>,
+    query: Query<(
+        Entity,
+        &Health,
+        &PlayerId,
+        &Team,
+        &ShipClass,
+        &ControlledBy,
+        &LastDamagedBy,
+    )>,
     mut respawn_queue: ResMut<RespawnQueue>,
 ) {
-    for (entity, health, player_id, team, class, controlled_by) in query.iter() {
+    for (entity, health, player_id, team, class, controlled_by, last_hit) in query.iter() {
         if health.current <= 0.0 {
-            info!("Ship {:?} destroyed (player {:?})", entity, player_id.0);
+            if let Some(killer) = last_hit.attacker {
+                info!(
+                    "Ship {:?} destroyed (player {:?}) — killed by {:?}",
+                    entity, player_id.0, killer
+                );
+            } else {
+                info!("Ship {:?} destroyed (player {:?})", entity, player_id.0);
+            }
             respawn_queue.0.push(PendingRespawn {
                 peer_id: player_id.0,
                 team: *team,
@@ -463,17 +481,18 @@ fn server_fire_laser(
         &Team,
         &ShipClass,
         &Position,
+        &PlayerId,
         &mut Ammo,
     )>,
-    mut targets: Query<(Entity, &Position, &Team, &mut Health)>,
+    mut targets: Query<(Entity, &Position, &Team, &mut Health, &mut LastDamagedBy)>,
     asteroids: Query<(&Position, &Asteroid)>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
 
-    // Collect (hit_entity, damage) pairs first
-    let mut hits: Vec<(Entity, f32)> = Vec::new();
+    // Collect (hit_entity, damage, attacker) tuples first
+    let mut hits: Vec<(Entity, f32, PeerId)> = Vec::new();
 
-    for (input, team, class, pos, mut ammo) in ships.iter_mut() {
+    for (input, team, class, pos, player_id, mut ammo) in ships.iter_mut() {
         if *class != ShipClass::TorpedoBoat || !input.0.fire {
             continue;
         }
@@ -500,7 +519,7 @@ fn server_fire_laser(
         }
 
         // Check enemy ships
-        for (entity, target_pos, target_team, _hp) in targets.iter() {
+        for (entity, target_pos, target_team, _hp, _) in targets.iter() {
             if *target_team == *team {
                 continue;
             }
@@ -520,14 +539,15 @@ fn server_fire_laser(
         if let Some(entity) = best_entity {
             // Damage falls off with distance (full at 0, 30% at max range)
             let falloff = 1.0 - 0.7 * (best_t / LASER_RANGE);
-            hits.push((entity, LASER_DPS * falloff * dt));
+            hits.push((entity, LASER_DPS * falloff * dt, player_id.0));
         }
     }
 
     // Apply damage
-    for (entity, damage) in hits {
-        if let Ok((_, _, _, mut hp)) = targets.get_mut(entity) {
+    for (entity, damage, attacker) in hits {
+        if let Ok((_, _, _, mut hp, mut last_hit)) = targets.get_mut(entity) {
             hp.current -= damage;
+            last_hit.attacker = Some(attacker);
         }
     }
 }
@@ -1058,7 +1078,7 @@ fn server_anti_drone_pulse(
         &mut MineCooldown,
     )>,
     drones: Query<(Entity, &Position, &Drone)>,
-    mut ships: Query<(&Position, &Team, &mut Health)>,
+    mut ships: Query<(&Position, &Team, &mut Health, &mut LastDamagedBy)>,
 ) {
     let pulse_dist_sq = PULSE_RADIUS * PULSE_RADIUS;
     let blast_dist_sq = DRONE_DETONATION_RADIUS * DRONE_DETONATION_RADIUS;
@@ -1074,16 +1094,16 @@ fn server_anti_drone_pulse(
         cooldown.remaining = PULSE_COOLDOWN;
 
         // Detonate ALL drones within pulse radius (friend and foe)
-        for (drone_entity, drone_pos, _drone) in drones.iter() {
+        for (drone_entity, drone_pos, drone) in drones.iter() {
             if (drone_pos.0 - pos.0).length_squared() < pulse_dist_sq {
                 // Each drone explodes — deal area damage to nearby enemy ships
-                for (ship_pos, ship_team, mut health) in ships.iter_mut() {
+                for (ship_pos, ship_team, mut health, mut last_hit) in ships.iter_mut() {
                     if *ship_team == *team {
                         continue;
                     }
                     if (drone_pos.0 - ship_pos.0).length_squared() < blast_dist_sq {
-                        health.current =
-                            (health.current - DRONE_DETONATION_DAMAGE).max(0.0);
+                        health.current = (health.current - DRONE_DETONATION_DAMAGE).max(0.0);
+                        last_hit.attacker = Some(drone.owner);
                     }
                 }
                 commands.entity(drone_entity).try_despawn();
@@ -1143,9 +1163,15 @@ fn update_zone_scores(
         }
     }
 
-    // Clamp at limit
+    // Clamp at limit and detect victory
     scores.red = scores.red.min(SCORE_LIMIT);
     scores.blue = scores.blue.min(SCORE_LIMIT);
+
+    if scores.red >= SCORE_LIMIT {
+        scores.round_state = RoundState::Won(Team::Red);
+    } else if scores.blue >= SCORE_LIMIT {
+        scores.round_state = RoundState::Won(Team::Blue);
+    }
 }
 
 /// Spawn initial batch of drones when a DroneCommander first appears.

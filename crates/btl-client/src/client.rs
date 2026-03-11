@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use lightyear::prelude::client::input::InputSystems;
@@ -17,10 +17,11 @@ use avian2d::prelude::*;
 use btl_protocol::*;
 use btl_shared::{
     Ammo, Asteroid, Cloak, DCOMMANDER_MASS, DCOMMANDER_RADIUS, DEFENSE_TURRET_MOUNTS,
-    DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind, FrameInterpolate, drone_laser_firing, GUNSHIP_MASS,
+    DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind, FrameInterpolate, GUNSHIP_MASS,
     GUNSHIP_RADIUS, LASER_RANGE, MINE_RADIUS, MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position,
     Projectile, RailgunCharge, Rotation, SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS,
-    TBOAT_MASS, TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo, ray_circle_intersect,
+    TBOAT_MASS, TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo, drone_laser_firing,
+    ray_circle_intersect,
 };
 
 use crate::ZoneMarker;
@@ -489,7 +490,11 @@ impl Plugin for ClientPlugin {
                 render_route_gizmos,
             ),
         );
-        app.add_systems(Startup, (spawn_hud, spawn_score_hud, spawn_class_picker));
+        app.add_systems(
+            Startup,
+            (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_class_picker),
+        );
+        app.add_systems(Update, update_victory_overlay);
     }
 }
 
@@ -599,7 +604,15 @@ fn log_connected(trigger: On<Add, Connected>, query: Query<(), With<Client>>) {
 fn init_predicted_ships(
     mut commands: Commands,
     query: Query<
-        (Entity, &PlayerId, &Team, &ShipClass, &Position, &Rotation, Has<Controlled>),
+        (
+            Entity,
+            &PlayerId,
+            &Team,
+            &ShipClass,
+            &Position,
+            &Rotation,
+            Has<Controlled>,
+        ),
         UninitPredicted,
     >,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -1191,7 +1204,12 @@ fn render_laser_beams(
             gizmos.line_2d(
                 p0,
                 p1,
-                Color::LinearRgba(LinearRgba::new(2.0 * fade, 0.3 * fade, 0.3 * fade, 0.9 * fade)),
+                Color::LinearRgba(LinearRgba::new(
+                    2.0 * fade,
+                    0.3 * fade,
+                    0.3 * fade,
+                    0.9 * fade,
+                )),
             );
             // Glow
             let glow_a = 0.3 * fade;
@@ -1302,6 +1320,12 @@ struct ScoreBarBlue;
 
 #[derive(Component)]
 struct ScoreText;
+
+#[derive(Component)]
+struct VictoryOverlay;
+
+#[derive(Component)]
+struct VictoryText;
 
 type HealthBarFilter = (
     With<HealthBarFill>,
@@ -1585,6 +1609,75 @@ fn spawn_score_hud(mut commands: Commands) {
     ));
 }
 
+/// Spawn hidden victory overlay (shown when a team wins).
+fn spawn_victory_overlay(mut commands: Commands) {
+    let overlay = commands
+        .spawn((
+            VictoryOverlay,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            GlobalZIndex(300),
+            Visibility::Hidden,
+        ))
+        .id();
+
+    commands.spawn((
+        ChildOf(overlay),
+        VictoryText,
+        Text::new(""),
+        TextFont {
+            font_size: 48.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+    ));
+}
+
+/// Show/hide victory overlay based on round state.
+fn update_victory_overlay(
+    scores_q: Query<&TeamScores>,
+    mut overlay_q: Query<&mut Visibility, With<VictoryOverlay>>,
+    mut text_q: Query<(&mut Text, &mut TextColor), With<VictoryText>>,
+) {
+    let Ok(scores) = scores_q.single() else {
+        return;
+    };
+
+    let Ok(mut vis) = overlay_q.single_mut() else {
+        return;
+    };
+
+    match scores.round_state {
+        RoundState::Playing => {
+            *vis = Visibility::Hidden;
+        }
+        RoundState::Won(team) => {
+            *vis = Visibility::Inherited;
+            if let Ok((mut text, mut color)) = text_q.single_mut() {
+                match team {
+                    Team::Red => {
+                        **text = "RED TEAM WINS".into();
+                        *color = TextColor(Color::srgb(1.0, 0.3, 0.3));
+                    }
+                    Team::Blue => {
+                        **text = "BLUE TEAM WINS".into();
+                        *color = TextColor(Color::srgb(0.3, 0.3, 1.0));
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Update score HUD from replicated TeamScores.
 fn update_score_hud(
     scores_q: Query<&TeamScores>,
@@ -1626,8 +1719,8 @@ fn update_zone_colors(
     for (zone, mut sprite) in markers.iter_mut() {
         sprite.color = match scores.zone_control[zone.0] {
             1 => Color::srgba(0.9, 0.25, 0.25, 0.6), // Red controls
-            2 => Color::srgba(0.25, 0.25, 0.9, 0.6),  // Blue controls
-            _ => Color::srgba(0.4, 0.4, 0.2, 0.5),    // Contested / empty
+            2 => Color::srgba(0.25, 0.25, 0.9, 0.6), // Blue controls
+            _ => Color::srgba(0.4, 0.4, 0.2, 0.5),   // Contested / empty
         };
     }
 }
@@ -2523,7 +2616,9 @@ fn route_follow(
     // 1. Update progress (mutable write first, capped to prevent wild jumps)
     let proj = find_closest_on_path(&following.path, ship_pos, following.progress);
     let max_advance = (speed * dt / 20.0).max(2.0); // ~max path indices per tick
-    following.progress = proj.max(following.progress).min(following.progress + max_advance);
+    following.progress = proj
+        .max(following.progress)
+        .min(following.progress + max_advance);
 
     // 2. Cross-track error (signed, positive = left of path)
     let cte = cross_track_error(&following.path, ship_pos, following.progress);

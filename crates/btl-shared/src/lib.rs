@@ -437,12 +437,14 @@ impl Plugin for SharedPlugin {
             ..default()
         });
 
-        // Avian physics (disable plugins that lightyear manages)
+        // Avian physics (disable plugins that lightyear manages, and the debug
+        // renderer so the server can run headlessly without a GPU)
         app.add_plugins(
             PhysicsPlugins::default()
                 .build()
                 .disable::<PhysicsTransformPlugin>()
-                .disable::<PhysicsInterpolationPlugin>(),
+                .disable::<PhysicsInterpolationPlugin>()
+                .disable::<avian2d::debug_render::PhysicsDebugPlugin>(),
         );
 
         // Frame interpolation for smooth rendering between physics ticks
@@ -504,6 +506,7 @@ pub struct ShipBundle {
     pub turrets: Turrets,
     pub cloak: Cloak,
     pub railgun_charge: RailgunCharge,
+    pub last_damaged_by: LastDamagedBy,
 }
 
 impl ShipBundle {
@@ -558,7 +561,8 @@ impl ShipBundle {
                     mounts: (0..DEFENSE_TURRET_COUNT)
                         .map(|i| TurretState {
                             aim_angle: 0.0,
-                            cooldown: DEFENSE_TURRET_COOLDOWN * i as f32 / DEFENSE_TURRET_COUNT as f32,
+                            cooldown: DEFENSE_TURRET_COOLDOWN * i as f32
+                                / DEFENSE_TURRET_COUNT as f32,
                         })
                         .collect(),
                 },
@@ -592,6 +596,7 @@ impl ShipBundle {
                 cooldown: 0.0,
             },
             railgun_charge: RailgunCharge::default(),
+            last_damaged_by: LastDamagedBy::default(),
         }
     }
 }
@@ -743,7 +748,7 @@ fn update_projectile_lifetime(
 fn update_mine_lifetime(
     mut commands: Commands,
     mut mines: Query<(Entity, &mut Mine, &Position)>,
-    mut ships: Query<(&Position, &Team, &mut Health)>,
+    mut ships: Query<(&Position, &Team, &mut Health, &mut LastDamagedBy)>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let trigger_dist_sq = MINE_TRIGGER_RADIUS * MINE_TRIGGER_RADIUS;
@@ -755,12 +760,13 @@ fn update_mine_lifetime(
         mine.lifetime -= dt;
         if mine.lifetime <= 0.0 {
             // Detonate on expiry — damage nearby enemies
-            for (ship_pos, ship_team, mut health) in ships.iter_mut() {
+            for (ship_pos, ship_team, mut health, mut last_hit) in ships.iter_mut() {
                 if *ship_team == mine.owner_team {
                     continue;
                 }
                 if (mine_pos.0 - ship_pos.0).length_squared() < trigger_dist_sq {
                     health.current = (health.current - mine.damage).max(0.0);
+                    last_hit.attacker = Some(mine.owner);
                 }
             }
             commands.entity(entity).try_despawn();
@@ -852,7 +858,7 @@ fn enforce_map_boundary(mut query: Query<(&Position, &mut LinearVelocity)>) {
 pub fn check_mine_detonations(
     mut commands: Commands,
     mines: Query<(Entity, &Mine, &Position)>,
-    mut ships: Query<(Entity, &Position, &Team, &mut Health)>,
+    mut ships: Query<(Entity, &Position, &Team, &mut Health, &mut LastDamagedBy)>,
 ) {
     let trigger_dist_sq = MINE_TRIGGER_RADIUS * MINE_TRIGGER_RADIUS;
 
@@ -863,7 +869,7 @@ pub fn check_mine_detonations(
         }
 
         let mut detonated = false;
-        for (_ship_entity, ship_pos, ship_team, mut health) in ships.iter_mut() {
+        for (_ship_entity, ship_pos, ship_team, mut health, mut last_hit) in ships.iter_mut() {
             // No friendly fire — skip same team
             if *ship_team == mine.owner_team {
                 continue;
@@ -872,6 +878,7 @@ pub fn check_mine_detonations(
             let delta = mine_pos.0 - ship_pos.0;
             if delta.length_squared() < trigger_dist_sq {
                 health.current = (health.current - mine.damage).max(0.0);
+                last_hit.attacker = Some(mine.owner);
                 detonated = true;
                 break;
             }
@@ -897,7 +904,14 @@ fn sync_position_to_transform(mut query: Query<(&Position, &mut Transform), With
 pub fn check_projectile_hits(
     mut commands: Commands,
     projectiles: Query<(Entity, &Projectile, &Position, Option<&ProjectileKind>)>,
-    mut ships: Query<(Entity, &Position, &Team, &ShipClass, &mut Health)>,
+    mut ships: Query<(
+        Entity,
+        &Position,
+        &Team,
+        &ShipClass,
+        &mut Health,
+        &mut LastDamagedBy,
+    )>,
 ) {
     for (proj_entity, proj, proj_pos, proj_kind) in projectiles.iter() {
         let proj_radius = match proj_kind.copied().unwrap_or_default() {
@@ -907,7 +921,9 @@ pub fn check_projectile_hits(
             ProjectileKind::Railgun => RAILGUN_PROJECTILE_RADIUS,
         };
 
-        for (_ship_entity, ship_pos, ship_team, ship_class, mut health) in ships.iter_mut() {
+        for (_ship_entity, ship_pos, ship_team, ship_class, mut health, mut last_hit) in
+            ships.iter_mut()
+        {
             if *ship_team == proj.owner_team {
                 continue;
             }
@@ -923,6 +939,7 @@ pub fn check_projectile_hits(
             let delta = proj_pos.0 - ship_pos.0;
             if delta.length_squared() < hit_dist * hit_dist {
                 health.current = (health.current - proj.damage).max(0.0);
+                last_hit.attacker = Some(proj.owner);
                 commands.entity(proj_entity).try_despawn();
                 break;
             }
@@ -1045,14 +1062,14 @@ pub fn check_projectile_drone_hits(
 /// Laser drones fire erratic pulsed beams at nearest enemy within range.
 pub fn drone_laser_damage(
     drones: Query<(Entity, &Drone, &Position)>,
-    mut ships: Query<(Entity, &Position, &Team, &mut Health)>,
+    mut ships: Query<(Entity, &Position, &Team, &mut Health, &mut LastDamagedBy)>,
     time: Res<Time>,
 ) {
     let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let range_sq = DRONE_LASER_RANGE * DRONE_LASER_RANGE;
     let elapsed = time.elapsed_secs();
 
-    let mut hits: Vec<(Entity, f32)> = Vec::new();
+    let mut hits: Vec<(Entity, f32, PeerId)> = Vec::new();
 
     for (drone_entity, drone, drone_pos) in drones.iter() {
         if drone.kind != DroneKind::Laser {
@@ -1063,7 +1080,7 @@ pub fn drone_laser_damage(
         }
         let mut best_dist_sq = range_sq;
         let mut best_target = None;
-        for (entity, ship_pos, ship_team, _) in ships.iter() {
+        for (entity, ship_pos, ship_team, _, _) in ships.iter() {
             if *ship_team == drone.owner_team {
                 continue;
             }
@@ -1076,13 +1093,14 @@ pub fn drone_laser_damage(
         if let Some(target) = best_target {
             let dist = best_dist_sq.sqrt();
             let falloff = 1.0 - 0.7 * (dist / DRONE_LASER_RANGE);
-            hits.push((target, DRONE_LASER_DPS * falloff * dt));
+            hits.push((target, DRONE_LASER_DPS * falloff * dt, drone.owner));
         }
     }
 
-    for (entity, damage) in hits {
-        if let Ok((_, _, _, mut health)) = ships.get_mut(entity) {
+    for (entity, damage, owner) in hits {
+        if let Ok((_, _, _, mut health, mut last_hit)) = ships.get_mut(entity) {
             health.current = (health.current - damage).max(0.0);
+            last_hit.attacker = Some(owner);
         }
     }
 }
@@ -1091,13 +1109,19 @@ pub fn drone_laser_damage(
 pub fn drone_kamikaze_impact(
     mut commands: Commands,
     drones: Query<(Entity, &Drone, &Position)>,
-    mut ships: Query<(&Position, &Team, &ShipClass, &mut Health)>,
+    mut ships: Query<(
+        &Position,
+        &Team,
+        &ShipClass,
+        &mut Health,
+        &mut LastDamagedBy,
+    )>,
 ) {
     for (drone_entity, drone, drone_pos) in drones.iter() {
         if drone.kind != DroneKind::Kamikaze {
             continue;
         }
-        for (ship_pos, ship_team, ship_class, mut health) in ships.iter_mut() {
+        for (ship_pos, ship_team, ship_class, mut health, mut last_hit) in ships.iter_mut() {
             if *ship_team == drone.owner_team {
                 continue;
             }
@@ -1111,6 +1135,7 @@ pub fn drone_kamikaze_impact(
             let hit_dist = DRONE_RADIUS + ship_radius;
             if (drone_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
                 health.current = (health.current - DRONE_KAMIKAZE_DAMAGE).max(0.0);
+                last_hit.attacker = Some(drone.owner);
                 commands.entity(drone_entity).try_despawn();
                 break;
             }
@@ -1122,10 +1147,16 @@ pub fn drone_kamikaze_impact(
 pub fn check_torpedo_hits(
     mut commands: Commands,
     torpedoes: Query<(Entity, &Torpedo, &Position)>,
-    mut ships: Query<(&Position, &Team, &ShipClass, &mut Health)>,
+    mut ships: Query<(
+        &Position,
+        &Team,
+        &ShipClass,
+        &mut Health,
+        &mut LastDamagedBy,
+    )>,
 ) {
     for (torp_entity, torp, torp_pos) in torpedoes.iter() {
-        for (ship_pos, ship_team, ship_class, mut health) in ships.iter_mut() {
+        for (ship_pos, ship_team, ship_class, mut health, mut last_hit) in ships.iter_mut() {
             if *ship_team == torp.owner_team {
                 continue;
             }
@@ -1139,6 +1170,7 @@ pub fn check_torpedo_hits(
             let hit_dist = TORPEDO_RADIUS + ship_radius;
             if (torp_pos.0 - ship_pos.0).length_squared() < hit_dist * hit_dist {
                 health.current = (health.current - torp.damage).max(0.0);
+                last_hit.attacker = Some(torp.owner);
                 commands.entity(torp_entity).try_despawn();
                 break;
             }
