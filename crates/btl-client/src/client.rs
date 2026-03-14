@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::window::CursorOptions;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -16,12 +17,15 @@ use avian2d::prelude::*;
 
 use btl_protocol::*;
 use btl_shared::{
-    Ammo, Asteroid, Cloak, DCOMMANDER_MASS, DCOMMANDER_RADIUS, DEFENSE_TURRET_MOUNTS,
-    DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind, FrameInterpolate, GUNSHIP_MASS,
-    GUNSHIP_RADIUS, LASER_RANGE, MINE_RADIUS, MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position,
-    Projectile, RailgunCharge, Rotation, SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS,
-    TBOAT_MASS, TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo, drone_laser_firing,
-    ray_circle_intersect,
+    Ammo, Asteroid, Cloak, DCOMMANDER_MASS, DCOMMANDER_RADIUS, DAMAGE_FLASH_DURATION,
+    DamageFlash, DEFENSE_TURRET_MOUNTS, DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind,
+    FrameInterpolate, GUNSHIP_MASS, GUNSHIP_RADIUS, LASER_RANGE, MINE_RADIUS,
+    MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position, Projectile, RailgunCharge, Rotation,
+    SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS, SpawnProtection, TBOAT_MASS,
+    TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo,
+    ZoneDrone, ZoneRailgun, ZoneShield,
+    FACTORY_DRONE_LASER_RANGE, ZONE_SHIELD_RADIUS, RailgunTurretState,
+    compute_intercept, drone_laser_firing, primary_projectile_speed, ray_circle_intersect,
 };
 
 use crate::ZoneMarker;
@@ -43,7 +47,7 @@ fn team_color(team: &Team) -> Color {
     }
 }
 
-fn spawn_gun_barrel(commands: &mut Commands, parent: Entity) {
+fn spawn_gun_barrel(commands: &mut Commands, parent: Entity, pivot_y: f32) {
     commands.spawn((
         ChildOf(parent),
         GunBarrel,
@@ -53,7 +57,7 @@ fn spawn_gun_barrel(commands: &mut Commands, parent: Entity) {
             ..default()
         },
         Anchor::CENTER_LEFT,
-        Transform::from_xyz(0.0, 0.0, 0.1)
+        Transform::from_xyz(0.0, pivot_y, 0.1)
             .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
     ));
 }
@@ -116,6 +120,15 @@ pub struct TorpedoInitialized;
 #[derive(Component)]
 struct DroneInitialized;
 
+#[derive(Component)]
+struct ZoneDroneInitialized;
+
+#[derive(Component)]
+struct ZoneRailgunInitialized;
+
+#[derive(Component)]
+struct ZoneShieldInitialized;
+
 /// Marker for the gun barrel child entity.
 #[derive(Component)]
 struct GunBarrel;
@@ -130,13 +143,19 @@ struct ClassPicker {
     open: bool,
     /// Set for one frame when a class is selected, then cleared.
     pending_request: u8,
+    /// Currently selected ship class (for the HUD indicator).
+    selected: ShipClass,
 }
+
+/// Marker for the class indicator text in the HUD.
+#[derive(Component)]
+struct ClassIndicator;
 
 /// Marker for the class picker overlay root node.
 #[derive(Component)]
 struct ClassPickerOverlay;
 
-/// Marker for a class picker button. Stores which class it selects.
+/// Marker for a class picker button, storing which class it selects.
 #[derive(Component)]
 struct ClassPickerButton(ShipClass);
 
@@ -148,8 +167,9 @@ type GunBarrelFilter = (With<GunBarrel>, Without<LocalShip>);
 
 // --- Camera zoom ---
 
-const ZOOM_MIN: f32 = 2.0;
-const ZOOM_MAX: f32 = 3.2;
+const ZOOM_MIN: f32 = 1.0;
+const ZOOM_MAX: f32 = 6.0;
+const ZOOM_DEFAULT: f32 = ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) / 3.0;
 /// Scroll sensitivity (scale change per scroll tick)
 const ZOOM_SCROLL_STEP: f32 = 0.1;
 
@@ -160,10 +180,7 @@ struct CameraZoom {
 
 impl Default for CameraZoom {
     fn default() -> Self {
-        // Default at first third of the range
-        Self {
-            scale: ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) / 3.0,
-        }
+        Self { scale: ZOOM_DEFAULT }
     }
 }
 
@@ -176,10 +193,6 @@ const ROUTE_SAMPLE_COUNT: usize = 128;
 /// Derived from min turn radius: at cruise speed ~360, R_min = 360/6 = 60.
 /// Angles sharper than ~60° are rejected.
 const MIN_WAYPOINT_ANGLE: f32 = std::f32::consts::FRAC_PI_3; // 60°
-/// Pure-pursuit look-ahead: scales with speed, clamped to this range.
-const LOOK_AHEAD_MIN: f32 = 80.0;
-const LOOK_AHEAD_MAX: f32 = 400.0;
-const LOOK_AHEAD_TIME: f32 = 0.9; // seconds of travel to look ahead
 
 #[derive(Resource)]
 struct RoutePlanner {
@@ -202,8 +215,194 @@ impl Default for RoutePlanner {
             path: Vec::new(),
             curvatures: Vec::new(),
             last_rejected: false,
-            target_zoom: ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) / 3.0,
-            current_zoom: ZOOM_MIN + (ZOOM_MAX - ZOOM_MIN) / 3.0,
+            target_zoom: ZOOM_DEFAULT,
+            current_zoom: ZOOM_DEFAULT,
+        }
+    }
+}
+
+/// Which algorithm `route_follow` runs for this ship.
+/// Add a new variant here to implement an alternative autopilot.
+#[derive(Clone, Debug, Default)]
+enum AutopilotAlgorithm {
+    #[default]
+    VelocityVector,
+    /// Rotation-first: face the velocity-error direction, fire main thruster;
+    /// strafe runs an independent PD loop on cross-track error.
+    ThrusterRotate,
+    /// Analytic path tracking: scans ahead to determine when to start rotating,
+    /// faces the future path tangent so the main thruster pushes along the path,
+    /// strafe handles only minor lateral corrections.
+    SniperPath,
+}
+
+/// Parse ship class from `BTL_AP_CLASS` env var (defaults to TorpedoBoat).
+fn ap_class_from_env() -> ShipClass {
+    match std::env::var("BTL_AP_CLASS").as_deref().unwrap_or("") {
+        "Sniper" | "sniper" => ShipClass::Sniper,
+        "Interceptor" | "interceptor" => ShipClass::Interceptor,
+        "Gunship" | "gunship" => ShipClass::Gunship,
+        "DroneCommander" | "dronecommander" | "drone_commander" => ShipClass::DroneCommander,
+        _ => ShipClass::TorpedoBoat,
+    }
+}
+
+/// Per-tick inputs assembled by `route_follow` before dispatching to the algorithm.
+struct AutopilotInput<'a> {
+    ship_fwd: Vec2,
+    ship_right: Vec2,
+    lin_vel: Vec2,
+    speed: f32,
+    current_omega: f32,
+    path: &'a [Vec2],
+    progress: f32,
+    cte: f32,
+    tangent: Vec2,
+    path_normal: Vec2,
+    target_speed_raw: f32,
+    remaining: f32,
+}
+
+/// Per-tick outputs returned by the algorithm to `route_follow`.
+struct AutopilotOutput {
+    rotate: f32,
+    thrust_forward: f32,
+    stabilize: f32,
+    strafe: f32,
+    afterburner: bool,
+    /// Desired heading — used as aim_angle fallback when no cursor is available.
+    desired_angle: f32,
+    // Diagnostic fields for debug logging
+    target_speed: f32,
+    heading_err: f32,
+    fwd_vel_error: f32,
+    lat_vel_error: f32,
+}
+
+/// Tuning coefficients for the autopilot.
+/// One instance per ship class — swap freely without touching algorithm code.
+#[derive(Clone, Debug)]
+struct AutopilotConfig {
+    /// Which algorithm to run.
+    algorithm: AutopilotAlgorithm,
+    // Speed profile (computed once at route injection)
+    smooth_window: usize,
+    curvature_margin: f32,
+    curvature_divisor: f32,
+    speed_cap: f32,        // fraction of SHIP_MAX_SPEED
+    centripetal_thrust: f32, // if > 0, caps speed at sqrt(centripetal_thrust/k) per curve
+    accel: f32,
+    decel: f32,
+    // CTE speed reduction
+    cte_divisor: f32,
+    cte_speed_floor: f32,
+    // Desired-velocity / CTE correction
+    correction_gain: f32, // k_p: lateral correction strength
+    correction_kd: f32,   // k_d: derivative damping on lateral velocity (ThrusterRotate only)
+    correction_cap: f32,  // max correction speed (px/s)
+    // Look-ahead (ThrusterRotate only)
+    look_ahead_time: f32,
+    look_ahead_min: f32,
+    look_ahead_max: f32,
+    // Thrust / strafe / brake scaling
+    vel_error_scale: f32,
+    // Afterburner gate
+    afterburner_fwd_threshold: f32,
+    afterburner_heading_min: f32,
+    afterburner_cte_max: f32,
+    // Safety margin before end of route
+    stopping_dist_margin: f32,
+}
+
+impl AutopilotConfig {
+    fn for_class(class: ShipClass) -> Self {
+        use btl_shared::{
+            DCOMMANDER_AFTERBURNER_THRUST, GUNSHIP_AFTERBURNER_THRUST,
+            SNIPER_AFTERBURNER_THRUST, TBOAT_AFTERBURNER_THRUST, TBOAT_THRUST,
+        };
+        let ab = match class {
+            ShipClass::Interceptor    => SHIP_AFTERBURNER_THRUST,
+            ShipClass::Gunship        => GUNSHIP_AFTERBURNER_THRUST,
+            ShipClass::TorpedoBoat    => TBOAT_AFTERBURNER_THRUST,
+            ShipClass::Sniper         => SNIPER_AFTERBURNER_THRUST,
+            ShipClass::DroneCommander => DCOMMANDER_AFTERBURNER_THRUST,
+        };
+        // Sniper gets the analytic path-tracking algorithm.
+        if class == ShipClass::Sniper {
+            return Self {
+                algorithm: AutopilotAlgorithm::SniperPath,
+                smooth_window: 25,
+                curvature_margin: 0.32,
+                curvature_divisor: 180.0,
+                speed_cap: 0.82,
+                centripetal_thrust: 0.0,
+                accel: ab,
+                decel: SHIP_STABILIZE_DECEL * 0.8,
+                cte_divisor: 80.0,
+                cte_speed_floor: 0.35,
+                correction_gain: 0.4,  // unused
+                correction_kd: 0.4,    // lateral velocity damping for strafe
+                correction_cap: 300.0, // strafe divisor (larger = weaker strafe)
+                // look_ahead_time = early-rotation margin factor: start rotating when
+                // you still have this many × the minimum required rotation time left.
+                look_ahead_time: 2.5,
+                look_ahead_min: 150.0,
+                look_ahead_max: 1200.0,
+                vel_error_scale: 80.0,
+                afterburner_fwd_threshold: 100.0,
+                afterburner_heading_min: 0.5,
+                afterburner_cte_max: 150.0,
+                stopping_dist_margin: 1.5,
+            };
+        }
+        // TorpedoBoat gets a dedicated rotation-first algorithm.
+        if class == ShipClass::TorpedoBoat {
+            return Self {
+                algorithm: AutopilotAlgorithm::ThrusterRotate,
+                smooth_window: 40,
+                curvature_margin: 0.28,
+                curvature_divisor: 180.0,
+                speed_cap: 0.75,
+                centripetal_thrust: TBOAT_THRUST,
+                accel: ab,
+                decel: SHIP_STABILIZE_DECEL * 0.7,
+                cte_divisor: 70.0,
+                cte_speed_floor: 0.40,
+                correction_gain: 0.5,
+                correction_kd: 0.8,
+                correction_cap: 200.0,
+                look_ahead_time: 0.9,
+                look_ahead_min: 80.0,
+                look_ahead_max: 400.0,
+                vel_error_scale: 80.0,
+                afterburner_fwd_threshold: 100.0,
+                afterburner_heading_min: 0.5,
+                afterburner_cte_max: 150.0,
+                stopping_dist_margin: 1.5,
+            };
+        }
+        Self {
+            algorithm: AutopilotAlgorithm::VelocityVector,
+            smooth_window: 25,
+            curvature_margin: 0.32,
+            curvature_divisor: 180.0,
+            speed_cap: 0.78,
+            centripetal_thrust: 0.0,
+            accel: ab,
+            decel: SHIP_STABILIZE_DECEL * 0.8,
+            cte_divisor: 60.0,
+            cte_speed_floor: 0.40,
+            correction_gain: 0.5,
+            correction_kd: 0.0,
+            correction_cap: 250.0,
+            look_ahead_time: 0.0,
+            look_ahead_min: 0.0,
+            look_ahead_max: 0.0,
+            vel_error_scale: 80.0,
+            afterburner_fwd_threshold: 100.0,
+            afterburner_heading_min: 0.5,
+            afterburner_cte_max: 150.0,
+            stopping_dist_margin: 1.5,
         }
     }
 }
@@ -213,57 +412,99 @@ impl Default for RoutePlanner {
 struct RouteFollowing {
     path: Vec<Vec2>,
     curvatures: Vec<f32>,
-    /// Cumulative arc length at each path point (for accurate distance→index lookup).
-    arc_lengths: Vec<f32>,
     /// Precomputed max speed at each path point (braking-aware).
     speed_profile: Vec<f32>,
+    config: AutopilotConfig,
     /// Progress along the path as a fractional index (continuous, not discrete)
     progress: f32,
-    /// Integral accumulator for cross-track error (PID I-term).
-    cte_integral: f32,
+    /// Tick counter for periodic debug logging (tuning only).
+    debug_tick: u32,
+}
+
+/// Test route injector for autopilot tuning.
+/// Cycles through predefined routes once ship has stopped after each one.
+#[derive(Resource, Default)]
+struct TestRoutes {
+    /// Absolute waypoints per route (world coordinates, not relative to ship).
+    routes: Vec<Vec<Vec2>>,
+    current: usize,
+}
+
+impl TestRoutes {
+    fn new() -> Self {
+        // Routes chain: first waypoint of each route = last waypoint of previous.
+        // Ship brakes to a stop between routes, so it starts each route near WP[0].
+        let routes = vec![
+            // 1. Sweeping S-curve (from spawn, ends at (6500,0))
+            vec![
+                Vec2::new(-200.0, 0.0), Vec2::new(1500.0, 0.0), Vec2::new(2500.0, 1000.0),
+                Vec2::new(4000.0, 1200.0), Vec2::new(5500.0, 1000.0), Vec2::new(6500.0, 0.0),
+            ],
+            // 2. Southern sweep (from (6500,0), arcs south to (0,-3500))
+            vec![
+                Vec2::new(6500.0, 0.0), Vec2::new(7000.0, -1000.0), Vec2::new(7000.0, -2500.0),
+                Vec2::new(6000.0, -4000.0), Vec2::new(4000.0, -5000.0), Vec2::new(0.0, -3500.0),
+            ],
+            // 3. Chicane (from (0,-3500), alternating west to (-5500,-4000))
+            vec![
+                Vec2::new(0.0, -3500.0), Vec2::new(-2000.0, -2500.0), Vec2::new(-3000.0, -4500.0),
+                Vec2::new(-4500.0, -3000.0), Vec2::new(-5500.0, -4500.0),
+            ],
+            // 4. Wide U-turn (from (-5500,-4500), sweeps north to (-5000,3000))
+            vec![
+                Vec2::new(-5500.0, -4500.0), Vec2::new(-7000.0, -2500.0), Vec2::new(-7000.0, 0.0),
+                Vec2::new(-6500.0, 2000.0), Vec2::new(-5000.0, 3000.0),
+            ],
+            // 5. Lazy loop back (from (-5000,3000), sweeps back toward origin)
+            vec![
+                Vec2::new(-5000.0, 3000.0), Vec2::new(-2500.0, 5000.0), Vec2::new(0.0, 5000.0),
+                Vec2::new(2500.0, 4000.0), Vec2::new(3500.0, 2000.0), Vec2::new(2000.0, 0.0),
+            ],
+        ];
+        Self { routes, current: 0 }
+    }
+}
+
+/// Build a fan-triangulated mesh from a convex polygon defined by `verts`.
+/// The centroid is computed and used as the center vertex (index 0).
+fn build_fan_mesh(verts: Vec<[f32; 3]>) -> Mesh {
+    let n = verts.len();
+    let cx: f32 = verts.iter().map(|v| v[0]).sum::<f32>() / n as f32;
+    let cy: f32 = verts.iter().map(|v| v[1]).sum::<f32>() / n as f32;
+
+    let mut positions = Vec::with_capacity(n + 1);
+    positions.push([cx, cy, 0.0]); // index 0 = center
+    positions.extend_from_slice(&verts);
+
+    let mut indices: Vec<u16> = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        indices.push(0);
+        indices.push((i + 1) as u16);
+        indices.push(((i + 1) % n + 1) as u16);
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_indices(Indices::U16(indices));
+    mesh
 }
 
 /// Interceptor hull mesh: elongated needle/wedge, Razorback-inspired.
 /// Long narrow body tapering to a sharp nose. No wings.
 fn create_interceptor_mesh(r: f32) -> Mesh {
-    // Simple elongated hexagon — narrow and long (Y+ = forward)
-    let verts: Vec<[f32; 3]> = vec![
+    build_fan_mesh(vec![
         [0.0, r * 1.6, 0.0],       // 0: nose tip
         [r * 0.25, r * 0.3, 0.0],  // 1: right shoulder
         [r * 0.3, -r * 0.6, 0.0],  // 2: right rear
         [0.0, -r * 0.9, 0.0],      // 3: tail
         [-r * 0.3, -r * 0.6, 0.0], // 4: left rear
         [-r * 0.25, r * 0.3, 0.0], // 5: left shoulder
-    ];
-
-    // Centroid for fan triangulation
-    let n = verts.len() as f32;
-    let cx: f32 = verts.iter().map(|v| v[0]).sum::<f32>() / n;
-    let cy: f32 = verts.iter().map(|v| v[1]).sum::<f32>() / n;
-
-    let mut positions = vec![[cx, cy, 0.0]]; // index 0 = center
-    positions.extend_from_slice(&verts);
-
-    let num = verts.len();
-    let mut indices: Vec<u16> = Vec::with_capacity(num * 3);
-    for i in 0..num {
-        indices.push(0);
-        indices.push((i + 1) as u16);
-        indices.push(((i + 1) % num + 1) as u16);
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_indices(Indices::U16(indices));
-    mesh
+    ])
 }
 
 /// Gunship hull mesh: wider, blockier than the Interceptor. Armored look.
 fn create_gunship_mesh(r: f32) -> Mesh {
-    let verts: Vec<[f32; 3]> = vec![
+    build_fan_mesh(vec![
         [0.0, r * 1.2, 0.0],        // 0: nose (blunter than interceptor)
         [r * 0.45, r * 0.5, 0.0],   // 1: right forward
         [r * 0.55, -r * 0.1, 0.0],  // 2: right mid (widest)
@@ -272,36 +513,12 @@ fn create_gunship_mesh(r: f32) -> Mesh {
         [-r * 0.4, -r * 0.7, 0.0],  // 5: left rear
         [-r * 0.55, -r * 0.1, 0.0], // 6: left mid (widest)
         [-r * 0.45, r * 0.5, 0.0],  // 7: left forward
-    ];
-
-    let n = verts.len() as f32;
-    let cx: f32 = verts.iter().map(|v| v[0]).sum::<f32>() / n;
-    let cy: f32 = verts.iter().map(|v| v[1]).sum::<f32>() / n;
-
-    let mut positions = vec![[cx, cy, 0.0]];
-    positions.extend_from_slice(&verts);
-
-    let num = verts.len();
-    let mut indices: Vec<u16> = Vec::with_capacity(num * 3);
-    for i in 0..num {
-        indices.push(0);
-        indices.push((i + 1) as u16);
-        indices.push(((i + 1) % num + 1) as u16);
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_indices(Indices::U16(indices));
-    mesh
+    ])
 }
 
 /// Torpedo boat hull mesh: sleek medium body with side nacelles.
 fn create_torpedo_boat_mesh(r: f32) -> Mesh {
-    // Submarine shape: long, rounded bow, tapered stern
-    let verts: Vec<[f32; 3]> = vec![
+    build_fan_mesh(vec![
         [0.0, r * 1.35, 0.0],       // 0: bow tip
         [r * 0.15, r * 1.2, 0.0],   // 1: right bow curve
         [r * 0.28, r * 0.9, 0.0],   // 2: right forward hull
@@ -316,35 +533,12 @@ fn create_torpedo_boat_mesh(r: f32) -> Mesh {
         [-r * 0.32, r * 0.4, 0.0],  // 11: left mid-forward (widest)
         [-r * 0.28, r * 0.9, 0.0],  // 12: left forward hull
         [-r * 0.15, r * 1.2, 0.0],  // 13: left bow curve
-    ];
-
-    let n = verts.len() as f32;
-    let cx: f32 = verts.iter().map(|v| v[0]).sum::<f32>() / n;
-    let cy: f32 = verts.iter().map(|v| v[1]).sum::<f32>() / n;
-
-    let mut positions = vec![[cx, cy, 0.0]];
-    positions.extend_from_slice(&verts);
-
-    let num = verts.len();
-    let mut indices: Vec<u16> = Vec::with_capacity(num * 3);
-    for i in 0..num {
-        indices.push(0);
-        indices.push((i + 1) as u16);
-        indices.push(((i + 1) % num + 1) as u16);
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_indices(Indices::U16(indices));
-    mesh
+    ])
 }
 
 /// Sniper hull mesh: slim, angular stealth profile.
 fn create_sniper_mesh(r: f32) -> Mesh {
-    let verts: Vec<[f32; 3]> = vec![
+    build_fan_mesh(vec![
         [0.0, r * 1.5, 0.0],       // 0: sharp nose
         [r * 0.15, r * 0.8, 0.0],  // 1: right forward (very narrow)
         [r * 0.35, r * 0.1, 0.0],  // 2: right wing tip
@@ -355,35 +549,12 @@ fn create_sniper_mesh(r: f32) -> Mesh {
         [-r * 0.2, -r * 0.5, 0.0], // 7: left rear
         [-r * 0.35, r * 0.1, 0.0], // 8: left wing tip
         [-r * 0.15, r * 0.8, 0.0], // 9: left forward
-    ];
-
-    let n = verts.len() as f32;
-    let cx: f32 = verts.iter().map(|v| v[0]).sum::<f32>() / n;
-    let cy: f32 = verts.iter().map(|v| v[1]).sum::<f32>() / n;
-
-    let mut positions = vec![[cx, cy, 0.0]];
-    positions.extend_from_slice(&verts);
-
-    let num = verts.len();
-    let mut indices: Vec<u16> = Vec::with_capacity(num * 3);
-    for i in 0..num {
-        indices.push(0);
-        indices.push((i + 1) as u16);
-        indices.push(((i + 1) % num + 1) as u16);
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_indices(Indices::U16(indices));
-    mesh
+    ])
 }
 
 /// Drone Commander hull mesh: wide, flat hexagonal carrier shape.
 fn create_drone_commander_mesh(r: f32) -> Mesh {
-    let verts: Vec<[f32; 3]> = vec![
+    build_fan_mesh(vec![
         [0.0, r * 1.0, 0.0],       // 0: nose (blunt)
         [r * 0.5, r * 0.6, 0.0],   // 1: right forward
         [r * 0.65, 0.0, 0.0],      // 2: right mid (widest)
@@ -394,30 +565,7 @@ fn create_drone_commander_mesh(r: f32) -> Mesh {
         [-r * 0.5, -r * 0.5, 0.0], // 7: left rear
         [-r * 0.65, 0.0, 0.0],     // 8: left mid (widest)
         [-r * 0.5, r * 0.6, 0.0],  // 9: left forward
-    ];
-
-    let n = verts.len() as f32;
-    let cx: f32 = verts.iter().map(|v| v[0]).sum::<f32>() / n;
-    let cy: f32 = verts.iter().map(|v| v[1]).sum::<f32>() / n;
-
-    let mut positions = vec![[cx, cy, 0.0]];
-    positions.extend_from_slice(&verts);
-
-    let num = verts.len();
-    let mut indices: Vec<u16> = Vec::with_capacity(num * 3);
-    for i in 0..num {
-        indices.push(0);
-        indices.push((i + 1) as u16);
-        indices.push(((i + 1) % num + 1) as u16);
-    }
-
-    let mut mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    );
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_indices(Indices::U16(indices));
-    mesh
+    ])
 }
 
 pub struct ClientPlugin {
@@ -444,12 +592,21 @@ impl Plugin for ClientPlugin {
 
         app.init_resource::<CameraZoom>();
         app.init_resource::<RoutePlanner>();
-        app.init_resource::<ClassPicker>();
+        // Pre-select class from BTL_AP_CLASS env var so it spawns immediately on connect (tuning mode).
+        let ap_class = ap_class_from_env();
+        app.insert_resource(ClassPicker {
+            pending_request: ap_class.to_request(),
+            selected: ap_class,
+            open: false,
+        });
+        app.insert_resource(TestRoutes::new());
 
         app.add_systems(Startup, connect_to_server);
         app.add_systems(
             FixedPreUpdate,
-            (buffer_input, route_follow).in_set(InputSystems::WriteClientInputs),
+            (inject_test_route, buffer_input, brake_between_routes, route_follow)
+                .chain()
+                .in_set(InputSystems::WriteClientInputs),
         );
         app.add_observer(log_connected);
         app.add_systems(
@@ -478,7 +635,10 @@ impl Plugin for ClientPlugin {
             (
                 render_laser_beams,
                 render_railgun,
+                render_aim_helpers,
                 update_cloak_visuals,
+                update_damage_flash_visuals,
+                update_spawn_protection_visuals,
                 init_drones,
                 update_drone_visuals,
                 render_drone_lasers,
@@ -486,15 +646,28 @@ impl Plugin for ClientPlugin {
                 route_planning_input,
                 route_zoom,
                 class_picker_input,
-                class_picker_button_interaction,
+                class_picker_click,
+                update_class_indicator,
                 render_route_gizmos,
             ),
         );
         app.add_systems(
-            Startup,
-            (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_class_picker),
+            Update,
+            (
+                init_zone_drones,
+                update_zone_drone_visuals,
+                render_zone_drone_lasers,
+                init_zone_railguns,
+                update_zone_railgun_visuals,
+                init_zone_shields,
+                render_zone_shields,
+            ),
         );
-        app.add_systems(Update, update_victory_overlay);
+        app.add_systems(
+            Startup,
+            (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_class_picker, hide_window_cursor),
+        );
+        app.add_systems(Update, (update_victory_overlay, render_custom_cursor));
     }
 }
 
@@ -571,13 +744,12 @@ fn buffer_input(
         })
         .unwrap_or(std::f32::consts::FRAC_PI_2); // default: aim up
 
-    // Consume pending class request (one-shot)
-    let class_request = std::mem::take(&mut picker.pending_request);
-
     let key = |k| f32::from(keypress.pressed(k));
     let axis = |pos, neg| key(pos) - key(neg);
 
     for mut action_state in query.iter_mut() {
+        // Consume pending class request only when we have an action state to write to
+        let class_request = std::mem::take(&mut picker.pending_request);
         action_state.0 = ShipInput {
             thrust_forward: key(KeyCode::KeyW),
             thrust_backward: key(KeyCode::KeyS),
@@ -648,7 +820,8 @@ fn init_predicted_ships(
                 ..default()
             },
         ));
-        spawn_gun_barrel(&mut commands, entity);
+        let barrel_pivot_y = if *class == ShipClass::Interceptor { SHIP_RADIUS * 0.4 } else { 0.0 };
+        spawn_gun_barrel(&mut commands, entity, barrel_pivot_y);
         if *class == ShipClass::Gunship {
             spawn_turret_barrels(&mut commands, entity);
         } else if *class == ShipClass::DroneCommander {
@@ -715,7 +888,8 @@ fn init_interpolated_ships(
                 .with_rotation(Quat::from_rotation_z(rot.as_radians())),
             ShipInitialized,
         ));
-        spawn_gun_barrel(&mut commands, entity);
+        let barrel_pivot_y = if *class == ShipClass::Interceptor { SHIP_RADIUS * 0.4 } else { 0.0 };
+        spawn_gun_barrel(&mut commands, entity, barrel_pivot_y);
         if *class == ShipClass::Gunship {
             spawn_turret_barrels(&mut commands, entity);
         } else if *class == ShipClass::DroneCommander {
@@ -1003,6 +1177,58 @@ fn update_torpedo_visuals(
     }
 }
 
+/// Shared visual setup for player and zone defense drones.
+/// `marker` is inserted as the "initialized" tag (e.g., `DroneInitialized`).
+fn insert_drone_mesh_visuals(
+    commands: &mut Commands,
+    entity: Entity,
+    team: Team,
+    kind: DroneKind,
+    pos: Vec2,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+    marker: impl Bundle,
+) {
+    let team_tint = match team {
+        Team::Red => LinearRgba::new(1.5, 0.5, 0.3, 0.9),
+        Team::Blue => LinearRgba::new(0.3, 0.5, 1.5, 0.9),
+    };
+    match kind {
+        DroneKind::Laser => {
+            let r = DRONE_RADIUS;
+            let mesh = meshes.add(Triangle2d::new(
+                Vec2::new(r * 1.5, 0.0),
+                Vec2::new(-r * 0.8, r * 0.6),
+                Vec2::new(-r * 0.8, -r * 0.6),
+            ));
+            let mat = materials.add(ColorMaterial::from_color(Color::LinearRgba(team_tint)));
+            commands.entity(entity).insert((
+                Mesh2d(mesh),
+                MeshMaterial2d(mat),
+                Transform::from_xyz(pos.x, pos.y, 4.0),
+                marker,
+            ));
+        }
+        DroneKind::Kamikaze => {
+            let r = DRONE_RADIUS * 0.9;
+            let mesh = meshes.add(RegularPolygon::new(r, 8));
+            let kaze_tint = LinearRgba::new(
+                team_tint.red * 0.8 + 0.5,
+                team_tint.green * 0.5,
+                team_tint.blue * 0.3,
+                0.9,
+            );
+            let mat = materials.add(ColorMaterial::from_color(Color::LinearRgba(kaze_tint)));
+            commands.entity(entity).insert((
+                Mesh2d(mesh),
+                MeshMaterial2d(mat),
+                Transform::from_xyz(pos.x, pos.y, 4.0),
+                marker,
+            ));
+        }
+    }
+}
+
 /// Initialize rendering for replicated drone entities (small triangles).
 fn init_drones(
     mut commands: Commands,
@@ -1011,48 +1237,10 @@ fn init_drones(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for (entity, drone, pos) in query.iter() {
-        let team_tint = match drone.owner_team {
-            Team::Red => LinearRgba::new(1.5, 0.5, 0.3, 0.9),
-            Team::Blue => LinearRgba::new(0.3, 0.5, 1.5, 0.9),
-        };
-
-        match drone.kind {
-            DroneKind::Laser => {
-                // Mini ship shape: elongated diamond (4 vertices)
-                let r = DRONE_RADIUS;
-                let mesh = meshes.add(Triangle2d::new(
-                    Vec2::new(r * 1.5, 0.0),
-                    Vec2::new(-r * 0.8, r * 0.6),
-                    Vec2::new(-r * 0.8, -r * 0.6),
-                ));
-                let mat = materials.add(ColorMaterial::from_color(Color::LinearRgba(team_tint)));
-                commands.entity(entity).insert((
-                    Mesh2d(mesh),
-                    MeshMaterial2d(mat),
-                    Transform::from_xyz(pos.0.x, pos.0.y, 4.0),
-                    DroneInitialized,
-                ));
-            }
-            DroneKind::Kamikaze => {
-                // Mini mine shape: small octagon with warning tint
-                let r = DRONE_RADIUS * 0.9;
-                let mesh = meshes.add(RegularPolygon::new(r, 8));
-                // Darker, more orange/red tint for kamikaze
-                let kaze_tint = LinearRgba::new(
-                    team_tint.red * 0.8 + 0.5,
-                    team_tint.green * 0.5,
-                    team_tint.blue * 0.3,
-                    0.9,
-                );
-                let mat = materials.add(ColorMaterial::from_color(Color::LinearRgba(kaze_tint)));
-                commands.entity(entity).insert((
-                    Mesh2d(mesh),
-                    MeshMaterial2d(mat),
-                    Transform::from_xyz(pos.0.x, pos.0.y, 4.0),
-                    DroneInitialized,
-                ));
-            }
-        }
+        insert_drone_mesh_visuals(
+            &mut commands, entity, drone.owner_team, drone.kind, pos.0,
+            &mut meshes, &mut materials, DroneInitialized,
+        );
     }
 }
 
@@ -1132,6 +1320,162 @@ fn render_pulse_indicator(
         if cooldown.remaining <= 0.0 {
             gizmos.circle_2d(ship_pos, PULSE_RADIUS, Color::srgba(0.5, 0.8, 0.5, 0.1));
         }
+    }
+}
+
+/// Initialize rendering for zone defense drones (reuse drone visual style).
+fn init_zone_drones(
+    mut commands: Commands,
+    query: Query<(Entity, &ZoneDrone, &Position), Without<ZoneDroneInitialized>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for (entity, drone, pos) in query.iter() {
+        insert_drone_mesh_visuals(
+            &mut commands, entity, drone.team, drone.kind, pos.0,
+            &mut meshes, &mut materials, ZoneDroneInitialized,
+        );
+    }
+}
+
+/// Orient zone drones along their velocity (same as player drones).
+fn update_zone_drone_visuals(
+    mut query: Query<(&mut Transform, &LinearVelocity), With<ZoneDroneInitialized>>,
+) {
+    for (mut tf, vel) in query.iter_mut() {
+        if vel.0.length_squared() > 1.0 {
+            let angle = vel.0.to_angle();
+            tf.rotation = Quat::from_rotation_z(angle);
+        }
+    }
+}
+
+/// Render laser beams from zone defense laser drones to their targets.
+fn render_zone_drone_lasers(
+    drones: Query<(&ZoneDrone, &Transform), With<ZoneDroneInitialized>>,
+    enemies: Query<(&Transform, &Team), With<ShipInitialized>>,
+    mut gizmos: Gizmos,
+) {
+    let range_sq = FACTORY_DRONE_LASER_RANGE * FACTORY_DRONE_LASER_RANGE;
+
+    for (drone, drone_tf) in drones.iter() {
+        if !matches!(drone.kind, DroneKind::Laser) {
+            continue;
+        }
+
+        let drone_pos = drone_tf.translation.truncate();
+        let mut best_dist_sq = range_sq;
+        let mut best_pos = None;
+
+        for (enemy_tf, enemy_team) in enemies.iter() {
+            if *enemy_team == drone.team {
+                continue;
+            }
+            let enemy_pos = enemy_tf.translation.truncate();
+            let dist_sq = (enemy_pos - drone_pos).length_squared();
+            if dist_sq < best_dist_sq {
+                best_dist_sq = dist_sq;
+                best_pos = Some(enemy_pos);
+            }
+        }
+
+        if let Some(target_pos) = best_pos {
+            let beam_color = match drone.team {
+                Team::Red => Color::srgba(1.0, 0.3, 0.2, 0.6),
+                Team::Blue => Color::srgba(0.2, 0.3, 1.0, 0.6),
+            };
+            gizmos.line_2d(drone_pos, target_pos, beam_color);
+        }
+    }
+}
+
+/// Initialize rendering for zone railgun turrets.
+fn init_zone_railguns(
+    mut commands: Commands,
+    query: Query<(Entity, &ZoneRailgun, &Position), Without<ZoneRailgunInitialized>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for (entity, turret, pos) in query.iter() {
+        let color = match turret.team {
+            Team::Red => LinearRgba::new(1.0, 0.2, 0.1, 0.8),
+            Team::Blue => LinearRgba::new(0.1, 0.2, 1.0, 0.8),
+        };
+        // Railgun turret: a diamond/rhombus shape
+        let r = 20.0;
+        let mesh = meshes.add(Triangle2d::new(
+            Vec2::new(r * 2.0, 0.0),
+            Vec2::new(-r * 0.6, r * 0.8),
+            Vec2::new(-r * 0.6, -r * 0.8),
+        ));
+        let mat = materials.add(ColorMaterial::from_color(Color::LinearRgba(color)));
+        commands.entity(entity).insert((
+            Mesh2d(mesh),
+            MeshMaterial2d(mat),
+            Transform::from_xyz(pos.0.x, pos.0.y, 5.0),
+            ZoneRailgunInitialized,
+        ));
+    }
+}
+
+/// Update railgun turret visuals: rotation follows aim_angle, charge glow.
+fn update_zone_railgun_visuals(
+    mut query: Query<(&ZoneRailgun, &mut Transform), With<ZoneRailgunInitialized>>,
+    mut gizmos: Gizmos,
+) {
+    for (turret, mut tf) in query.iter_mut() {
+        tf.rotation = Quat::from_rotation_z(turret.aim_angle);
+        let turret_pos = tf.translation.truncate();
+
+        // Show charge indicator
+        if turret.charge > 0.0 {
+            let alpha = turret.charge * 0.5;
+            let charge_color = Color::srgba(0.0, 1.0, 1.0, alpha);
+            gizmos.circle_2d(turret_pos, 15.0 + turret.charge * 10.0, charge_color);
+        }
+
+        // Telegraph: when locked, draw a bright warning line
+        if matches!(turret.state, RailgunTurretState::Locked(_)) {
+            let dir = Vec2::new(turret.aim_angle.cos(), turret.aim_angle.sin());
+            let end = turret_pos + dir * 800.0;
+            let warn_color = Color::srgba(1.0, 0.0, 0.0, 0.7);
+            gizmos.line_2d(turret_pos, end, warn_color);
+        }
+    }
+}
+
+/// Initialize rendering for zone shield bubbles.
+fn init_zone_shields(
+    mut commands: Commands,
+    query: Query<(Entity, &ZoneShield, &Position), Without<ZoneShieldInitialized>>,
+) {
+    for (entity, _shield, _pos) in query.iter() {
+        // Shield is rendered via gizmos, just add the marker
+        commands.entity(entity).insert(ZoneShieldInitialized);
+    }
+}
+
+/// Render shield bubble as a translucent circle.
+fn render_zone_shields(
+    shields: Query<(&ZoneShield, &Position), With<ZoneShieldInitialized>>,
+    mut gizmos: Gizmos,
+) {
+    for (shield, pos) in shields.iter() {
+        if !shield.active {
+            continue;
+        }
+        let color = match shield.team {
+            Team::Red => Color::srgba(1.0, 0.3, 0.2, 0.15),
+            Team::Blue => Color::srgba(0.2, 0.3, 1.0, 0.15),
+        };
+        let edge_color = match shield.team {
+            Team::Red => Color::srgba(1.0, 0.4, 0.3, 0.4),
+            Team::Blue => Color::srgba(0.3, 0.4, 1.0, 0.4),
+        };
+        // Draw filled-ish shield with concentric rings
+        gizmos.circle_2d(pos.0, ZONE_SHIELD_RADIUS, edge_color);
+        gizmos.circle_2d(pos.0, ZONE_SHIELD_RADIUS * 0.95, color);
+        gizmos.circle_2d(pos.0, ZONE_SHIELD_RADIUS * 0.9, color);
     }
 }
 
@@ -1255,14 +1599,136 @@ fn render_railgun(ships: Query<(&ShipClass, &Transform, &RailgunCharge)>, mut gi
     }
 }
 
+/// Draw a lead-indicator crosshair at the predicted intercept point for each visible
+/// enemy ship, accounting for projectile flight time and both ships' velocities.
+/// Only shown for classes with a ballistic player-aimed primary weapon.
+fn render_aim_helpers(
+    local_ship: Query<(&Transform, &LinearVelocity, &ShipClass, &Team), With<LocalShip>>,
+    enemies: Query<
+        (&Transform, &LinearVelocity, &Team, &Cloak),
+        (With<ShipInitialized>, Without<LocalShip>),
+    >,
+    mut gizmos: Gizmos,
+) {
+    let Ok((ship_tf, own_vel, class, my_team)) = local_ship.single() else {
+        return;
+    };
+    let Some(speed) = primary_projectile_speed(*class) else {
+        return;
+    };
+
+    let own_pos = ship_tf.translation.truncate();
+
+    for (enemy_tf, enemy_vel, enemy_team, cloak) in enemies.iter() {
+        if *enemy_team == *my_team || cloak.active {
+            continue;
+        }
+        let target_pos = enemy_tf.translation.truncate();
+        let Some(aim_pt) = compute_intercept(own_pos, own_vel.0, target_pos, enemy_vel.0, speed)
+        else {
+            continue;
+        };
+
+        let color = Color::srgba(1.0, 0.85, 0.1, 0.75);
+        let dim = Color::srgba(1.0, 0.85, 0.1, 0.3);
+        gizmos.circle_2d(aim_pt, 9.0, color);
+        gizmos.line_2d(aim_pt - Vec2::X * 13.0, aim_pt + Vec2::X * 13.0, dim);
+        gizmos.line_2d(aim_pt - Vec2::Y * 13.0, aim_pt + Vec2::Y * 13.0, dim);
+    }
+}
+
+/// Hide the OS cursor; a per-class gizmo cursor is drawn in its place.
+fn hide_window_cursor(mut cursor_opts: Query<&mut CursorOptions>) {
+    if let Ok(mut opts) = cursor_opts.single_mut() {
+        opts.visible = false;
+    }
+}
+
+/// Draw a ship-class-appropriate cursor at the mouse position in world space.
+/// All sizes are multiplied by `zoom.scale` so the cursor stays the same screen size.
+fn render_custom_cursor(
+    windows: Query<&Window>,
+    camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    local_ship: Query<&ShipClass, With<LocalShip>>,
+    zoom: Res<CameraZoom>,
+    picker: Res<ClassPicker>,
+    mut gizmos: Gizmos,
+) {
+    if picker.open {
+        return;
+    }
+    let Some(p) = cursor_world_pos(&windows, &camera_query) else {
+        return;
+    };
+    let s = zoom.scale;
+    let class = local_ship.single().ok().copied().unwrap_or_default();
+    let bright = Color::srgba(0.95, 0.95, 0.95, 0.9);
+    let dim = Color::srgba(0.95, 0.95, 0.95, 0.4);
+
+    match class {
+        ShipClass::Interceptor => {
+            // Gap crosshair — point the autocannon at the target
+            let gap = 4.0 * s;
+            let arm = 10.0 * s;
+            for dir in [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y] {
+                gizmos.line_2d(p + dir * gap, p + dir * (gap + arm), bright);
+            }
+            gizmos.circle_2d(p, 1.5 * s, bright);
+        }
+        ShipClass::Gunship => {
+            // Corner bracket reticle — heavy targeting lock for the cannon
+            let hs = 10.0 * s;
+            let arm = 5.0 * s;
+            for (cx, cy) in [(hs, hs), (hs, -hs), (-hs, hs), (-hs, -hs)] {
+                let c = p + Vec2::new(cx, cy);
+                gizmos.line_2d(c, c + Vec2::new(-cx.signum() * arm, 0.0), bright);
+                gizmos.line_2d(c, c + Vec2::new(0.0, -cy.signum() * arm), bright);
+            }
+        }
+        ShipClass::TorpedoBoat => {
+            // Concentric rings with ticks — laser beam contact point
+            gizmos.circle_2d(p, 3.0 * s, bright);
+            gizmos.circle_2d(p, 8.0 * s, dim);
+            let inner = 10.0 * s;
+            let outer = 13.0 * s;
+            for dir in [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y] {
+                gizmos.line_2d(p + dir * inner, p + dir * outer, bright);
+            }
+        }
+        ShipClass::Sniper => {
+            // Scope ring + crosshairs + outer ticks — precise railgun aim
+            let r = 14.0 * s;
+            let ext = 8.0 * s;
+            gizmos.circle_2d(p, r, bright);
+            gizmos.line_2d(p - Vec2::X * r, p + Vec2::X * r, dim);
+            gizmos.line_2d(p - Vec2::Y * r, p + Vec2::Y * r, dim);
+            for dir in [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y] {
+                gizmos.line_2d(p + dir * (r + 3.0 * s), p + dir * (r + ext), bright);
+            }
+        }
+        ShipClass::DroneCommander => {
+            // Tri-spoke with capped tips — drone deployment spread indicator
+            gizmos.circle_2d(p, 4.0 * s, dim);
+            for i in 0..3 {
+                let angle = i as f32 * std::f32::consts::TAU / 3.0;
+                let dir = Vec2::new(angle.cos(), angle.sin());
+                let perp = Vec2::new(-dir.y, dir.x);
+                gizmos.line_2d(p + dir * 6.0 * s, p + dir * 14.0 * s, bright);
+                let tip = p + dir * 14.0 * s;
+                gizmos.line_2d(tip - perp * 2.5 * s, tip + perp * 2.5 * s, bright);
+            }
+        }
+    }
+}
+
 /// Apply cloak visual: make cloaked enemy ships semi-transparent (faint shimmer).
 /// Own cloaked ship gets slight transparency. Allied cloaked ships stay visible.
 fn update_cloak_visuals(
-    mut ships: Query<
+    ships: Query<
         (
-            &Cloak,
+            Ref<Cloak>,
             &Team,
-            &mut MeshMaterial2d<ColorMaterial>,
+            &MeshMaterial2d<ColorMaterial>,
             Has<LocalShip>,
         ),
         With<ShipInitialized>,
@@ -1276,27 +1742,77 @@ fn update_cloak_visuals(
     };
     let t = time.elapsed_secs();
 
-    for (cloak, team, mat_handle, is_local) in ships.iter_mut() {
+    for (cloak, team, mat_handle, is_local) in ships.iter() {
+        // Skip if not cloaked and state hasn't changed (avoids spurious asset mutations)
+        if !cloak.active && !cloak.is_changed() {
+            continue;
+        }
         let Some(mat) = materials.get_mut(&mat_handle.0) else {
             continue;
         };
 
         if cloak.active {
             if is_local {
-                // Own ship: slightly transparent
                 mat.color = mat.color.with_alpha(0.4);
             } else if *team == *my_team {
-                // Allied cloaked ship: slightly transparent
                 mat.color = mat.color.with_alpha(0.5);
             } else {
-                // Enemy cloaked ship: faint shimmer
                 let shimmer = (t * 3.0).sin() * 0.05 + 0.08;
                 mat.color = mat.color.with_alpha(shimmer);
             }
         } else {
-            // Not cloaked: full opacity
             mat.color = mat.color.with_alpha(1.0);
         }
+    }
+}
+
+/// White flash overlay when ship takes damage.
+fn update_damage_flash_visuals(
+    mut ships: Query<
+        (&DamageFlash, &mut MeshMaterial2d<ColorMaterial>),
+        With<ShipInitialized>,
+    >,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    for (flash, mat_handle) in ships.iter_mut() {
+        if flash.timer <= 0.0 {
+            continue;
+        }
+        let Some(mat) = materials.get_mut(&mat_handle.0) else {
+            continue;
+        };
+        // Blend toward white based on flash progress (1.0 at start, 0.0 at end)
+        let t = (flash.timer / DAMAGE_FLASH_DURATION).clamp(0.0, 1.0);
+        let r = mat.color.to_srgba();
+        mat.color = Color::srgba(
+            r.red + (1.0 - r.red) * t * 0.8,
+            r.green + (1.0 - r.green) * t * 0.8,
+            r.blue + (1.0 - r.blue) * t * 0.8,
+            r.alpha,
+        );
+    }
+}
+
+/// Pulsing translucent effect during spawn invulnerability.
+fn update_spawn_protection_visuals(
+    mut ships: Query<
+        (&SpawnProtection, &mut MeshMaterial2d<ColorMaterial>),
+        With<ShipInitialized>,
+    >,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    time: Res<Time>,
+) {
+    let t = time.elapsed_secs();
+    for (sp, mat_handle) in ships.iter_mut() {
+        if sp.remaining <= 0.0 {
+            continue;
+        }
+        let Some(mat) = materials.get_mut(&mat_handle.0) else {
+            continue;
+        };
+        // Pulsing alpha: oscillate between 0.3 and 0.7
+        let pulse = (t * 6.0).sin() * 0.2 + 0.5;
+        mat.color = mat.color.with_alpha(pulse);
     }
 }
 
@@ -1500,6 +2016,18 @@ fn spawn_hud(mut commands: Commands) {
         BackgroundColor(Color::srgb(0.7, 0.5, 0.2)),
     ));
 
+    // Class indicator row at the bottom of the HUD panel
+    commands.spawn((
+        ClassIndicator,
+        ChildOf(panel),
+        Text::new("> INTERCEPTOR <"),
+        TextFont {
+            font_size: 12.0,
+            ..default()
+        },
+        TextColor(Color::srgb(0.2, 0.6, 0.3)),
+    ));
+
     // Speed + coords text (top-left)
     commands.spawn((
         HudText,
@@ -1675,6 +2203,13 @@ fn update_victory_overlay(
                 }
             }
         }
+        RoundState::Restarting(countdown) => {
+            *vis = Visibility::Inherited;
+            if let Ok((mut text, mut color)) = text_q.single_mut() {
+                **text = format!("Next round in {}...", countdown.ceil() as u32);
+                *color = TextColor(Color::WHITE);
+            }
+        }
     }
 }
 
@@ -1717,41 +2252,65 @@ fn update_zone_colors(
     };
 
     for (zone, mut sprite) in markers.iter_mut() {
-        sprite.color = match scores.zone_control[zone.0] {
-            1 => Color::srgba(0.9, 0.25, 0.25, 0.6), // Red controls
-            2 => Color::srgba(0.25, 0.25, 0.9, 0.6), // Blue controls
-            _ => Color::srgba(0.4, 0.4, 0.2, 0.5),   // Contested / empty
-        };
+        let zs = &scores.zones[zone.0];
+        // Progress: -1.0 = fully Red, 0.0 = neutral, 1.0 = fully Blue
+        let p = zs.progress;
+        if p < -0.01 {
+            // Red capturing/controlled — intensity scales with progress
+            let t = p.abs();
+            sprite.color = Color::srgba(0.4 + 0.5 * t, 0.25, 0.2 + 0.05 * t, 0.4 + 0.2 * t);
+        } else if p > 0.01 {
+            // Blue capturing/controlled
+            let t = p.abs();
+            sprite.color = Color::srgba(0.2 + 0.05 * t, 0.25, 0.4 + 0.5 * t, 0.4 + 0.2 * t);
+        } else {
+            // Neutral
+            sprite.color = Color::srgba(0.4, 0.4, 0.2, 0.5);
+        }
     }
 }
 
 /// Spawn the class picker overlay (hidden by default, toggled with Tab).
 fn spawn_class_picker(mut commands: Commands) {
-    // Center overlay panel
+    // Full-screen centering container (Pickable::IGNORE so it doesn't eat clicks)
     let overlay = commands
         .spawn((
             ClassPickerOverlay,
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Percent(30.0),
-                left: Val::Percent(50.0),
-                margin: UiRect::left(Val::Px(-150.0)),
-                width: Val::Px(300.0),
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Vw(100.0),
+                height: Val::Vh(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            GlobalZIndex(200),
+            Visibility::Hidden,
+            Pickable::IGNORE,
+        ))
+        .id();
+
+    // Inner panel
+    let panel = commands
+        .spawn((
+            ChildOf(overlay),
+            Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 padding: UiRect::all(Val::Px(16.0)),
                 row_gap: Val::Px(12.0),
+                width: Val::Px(300.0),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.9)),
-            GlobalZIndex(200),
-            Visibility::Hidden,
         ))
         .id();
 
     // Title
     commands.spawn((
-        ChildOf(overlay),
+        ChildOf(panel),
         Text::new("SELECT CLASS"),
         TextFont {
             font_size: 18.0,
@@ -1763,7 +2322,7 @@ fn spawn_class_picker(mut commands: Commands) {
     // Interceptor button
     spawn_class_button(
         &mut commands,
-        overlay,
+        panel,
         ShipClass::Interceptor,
         "INTERCEPTOR",
         "Fast & agile. Autocannon + mines.",
@@ -1773,7 +2332,7 @@ fn spawn_class_picker(mut commands: Commands) {
     // Gunship button
     spawn_class_button(
         &mut commands,
-        overlay,
+        panel,
         ShipClass::Gunship,
         "GUNSHIP",
         "Tough & heavy. Heavy cannon + turrets.",
@@ -1783,7 +2342,7 @@ fn spawn_class_picker(mut commands: Commands) {
     // Torpedo Boat button
     spawn_class_button(
         &mut commands,
-        overlay,
+        panel,
         ShipClass::TorpedoBoat,
         "TORPEDO BOAT",
         "Laser + homing torpedoes. Tactical.",
@@ -1793,7 +2352,7 @@ fn spawn_class_picker(mut commands: Commands) {
     // Sniper button
     spawn_class_button(
         &mut commands,
-        overlay,
+        panel,
         ShipClass::Sniper,
         "SNIPER",
         "Railgun + mines + cloak. Stealth.",
@@ -1803,7 +2362,7 @@ fn spawn_class_picker(mut commands: Commands) {
     // Drone Commander button
     spawn_class_button(
         &mut commands,
-        overlay,
+        panel,
         ShipClass::DroneCommander,
         "DRONE COMMANDER",
         "Defense turrets + attack drones + pulse.",
@@ -1812,7 +2371,7 @@ fn spawn_class_picker(mut commands: Commands) {
 
     // Hint text
     commands.spawn((
-        ChildOf(overlay),
+        ChildOf(panel),
         Text::new("[Tab] to close"),
         TextFont {
             font_size: 11.0,
@@ -1875,6 +2434,7 @@ fn class_picker_input(
     keypress: Res<ButtonInput<KeyCode>>,
     mut picker: ResMut<ClassPicker>,
     mut overlay: Query<&mut Visibility, With<ClassPickerOverlay>>,
+    mut cursor_opts: Query<&mut CursorOptions>,
 ) {
     if keypress.just_pressed(KeyCode::Tab) {
         picker.open = !picker.open;
@@ -1885,24 +2445,58 @@ fn class_picker_input(
                 Visibility::Hidden
             };
         }
+        if let Ok(mut opts) = cursor_opts.single_mut() {
+            opts.visible = picker.open;
+        }
     }
 }
 
-/// Handle clicks on class picker buttons.
-fn class_picker_button_interaction(
-    mut interaction_query: Query<(&Interaction, &ClassPickerButton), Changed<Interaction>>,
+/// Handle class picker button clicks via direct Interaction polling.
+fn class_picker_click(
     mut picker: ResMut<ClassPicker>,
+    buttons: Query<(&ClassPickerButton, &Interaction), With<Button>>,
     mut overlay: Query<&mut Visibility, With<ClassPickerOverlay>>,
+    mut cursor_opts: Query<&mut CursorOptions>,
 ) {
-    for (interaction, btn) in interaction_query.iter_mut() {
+    if !picker.open {
+        return;
+    }
+    for (btn, interaction) in buttons.iter() {
         if *interaction == Interaction::Pressed {
             picker.pending_request = btn.0.to_request();
+            picker.selected = btn.0;
             picker.open = false;
             if let Ok(mut vis) = overlay.single_mut() {
                 *vis = Visibility::Hidden;
             }
+            if let Ok(mut opts) = cursor_opts.single_mut() {
+                opts.visible = false;
+            }
+            return;
         }
     }
+}
+
+/// Update the HUD class indicator when the selected class changes.
+fn update_class_indicator(
+    picker: Res<ClassPicker>,
+    mut indicator_q: Query<(&mut Text, &mut TextColor), With<ClassIndicator>>,
+) {
+    if !picker.is_changed() {
+        return;
+    }
+    let Ok((mut text, mut color)) = indicator_q.single_mut() else {
+        return;
+    };
+    let (name, col) = match picker.selected {
+        ShipClass::Interceptor => ("INTERCEPTOR", Color::srgb(0.2, 0.6, 0.3)),
+        ShipClass::Gunship => ("GUNSHIP", Color::srgb(0.5, 0.3, 0.2)),
+        ShipClass::TorpedoBoat => ("TORPEDO BOAT", Color::srgb(0.2, 0.4, 0.6)),
+        ShipClass::Sniper => ("SNIPER", Color::srgb(0.4, 0.2, 0.5)),
+        ShipClass::DroneCommander => ("DRONE CMD", Color::srgb(0.3, 0.5, 0.3)),
+    };
+    text.0 = format!("> {} <", name);
+    *color = TextColor(col);
 }
 
 fn update_hud(
@@ -2025,7 +2619,8 @@ fn scroll_zoom(
 // --- Route planning systems ---
 
 use btl_shared::{
-    SHIP_ANGULAR_DECEL, SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_SPEED, SHIP_STABILIZE_DECEL, SHIP_THRUST,
+    SHIP_AFTERBURNER_THRUST, SHIP_ANGULAR_DECEL, SHIP_MAX_ANGULAR_SPEED, SHIP_MAX_SPEED,
+    SHIP_STABILIZE_DECEL,
 };
 
 /// Normalize angle to [-PI, PI].
@@ -2169,21 +2764,17 @@ fn compute_curvatures(path: &[Vec2]) -> Vec<f32> {
 /// 2. Backward pass: ensure we can decelerate in time for every upcoming slow section.
 ///    Uses v² = v_next² + 2·a·Δs (kinematic braking equation).
 /// 3. End of path: speed ramps to zero.
-fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
+fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32], cfg: &AutopilotConfig) -> Vec<f32> {
     let n = curvatures.len();
     if n == 0 {
         return vec![];
     }
 
-    let accel = SHIP_THRUST; // full acceleration
-    let decel = SHIP_STABILIZE_DECEL * 0.8; // braking — trust stabilize more
-
     // Curvature-based max speed at each point
     // Smooth curvatures forward: use max curvature in a look-ahead window
-    let smooth_window = 25;
     let mut max_curvature: Vec<f32> = vec![0.0; n];
     for i in 0..n {
-        let end = (i + smooth_window).min(n);
+        let end = (i + cfg.smooth_window).min(n);
         let mut peak = curvatures[i];
         for j in i..end {
             peak = peak.max(curvatures[j]);
@@ -2194,12 +2785,18 @@ fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
     let mut profile: Vec<f32> = max_curvature
         .iter()
         .map(|&k| {
-            if k > 0.001 {
-                // Balanced: good speed with tighter tracking
-                let margin = 0.32 / (1.0 + k * 180.0);
-                (SHIP_MAX_ANGULAR_SPEED * margin / k).min(SHIP_MAX_SPEED * 0.78)
+            let v_angular = if k > 0.001 {
+                let margin = cfg.curvature_margin / (1.0 + k * cfg.curvature_divisor);
+                (SHIP_MAX_ANGULAR_SPEED * margin / k).min(SHIP_MAX_SPEED * cfg.speed_cap)
             } else {
-                SHIP_MAX_SPEED * 0.78
+                SHIP_MAX_SPEED * cfg.speed_cap
+            };
+            // Centripetal-thrust limit: v = sqrt(centripetal_thrust / k).
+            // Ensures the main thruster can supply enough centripetal acceleration on curves.
+            if cfg.centripetal_thrust > 0.0 && k > 1e-6 {
+                v_angular.min((cfg.centripetal_thrust / k).sqrt())
+            } else {
+                v_angular
             }
         })
         .collect();
@@ -2211,7 +2808,7 @@ fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
     // v² = v_prev² + 2·a·Δs
     for i in 1..n {
         let ds = arc_lengths[i] - arc_lengths[i - 1];
-        let v_max_from_accel = (profile[i - 1] * profile[i - 1] + 2.0 * accel * ds).sqrt();
+        let v_max_from_accel = (profile[i - 1] * profile[i - 1] + 2.0 * cfg.accel * ds).sqrt();
         profile[i] = profile[i].min(v_max_from_accel);
     }
 
@@ -2219,7 +2816,7 @@ fn compute_speed_profile(curvatures: &[f32], arc_lengths: &[f32]) -> Vec<f32> {
     // v² = v_next² + 2·decel·Δs
     for i in (0..n - 1).rev() {
         let ds = arc_lengths[i + 1] - arc_lengths[i];
-        let v_max_from_brake = (profile[i + 1] * profile[i + 1] + 2.0 * decel * ds).sqrt();
+        let v_max_from_brake = (profile[i + 1] * profile[i + 1] + 2.0 * cfg.decel * ds).sqrt();
         profile[i] = profile[i].min(v_max_from_brake);
     }
 
@@ -2236,45 +2833,6 @@ fn compute_arc_lengths(path: &[Vec2]) -> Vec<f32> {
     lengths
 }
 
-/// Convert an arc-length distance from a fractional index into a fractional index offset.
-/// Walks forward along `arc_lengths` from `from_idx` by `dist` units and returns the new index.
-fn advance_by_arc_length(arc_lengths: &[f32], from_idx: f32, dist: f32) -> f32 {
-    let n = arc_lengths.len();
-    if n < 2 {
-        return from_idx;
-    }
-    let max_idx = (n - 1) as f32;
-
-    // Arc length at from_idx (interpolated)
-    let i = (from_idx as usize).min(n - 2);
-    let frac = from_idx - i as f32;
-    let arc_at_from = arc_lengths[i] + frac * (arc_lengths[i + 1] - arc_lengths[i]);
-    let target_arc = arc_at_from + dist;
-
-    // Binary search for the index where arc_lengths[idx] >= target_arc
-    let mut lo = i;
-    let mut hi = n - 1;
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if arc_lengths[mid] < target_arc {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    // Interpolate within the segment
-    if lo == 0 {
-        return 0.0;
-    }
-    let seg_start = arc_lengths[lo - 1];
-    let seg_end = arc_lengths[lo];
-    let seg_len = seg_end - seg_start;
-    if seg_len > 0.001 {
-        ((lo - 1) as f32 + (target_arc - seg_start) / seg_len).min(max_idx)
-    } else {
-        (lo as f32).min(max_idx)
-    }
-}
 
 fn rebuild_route_path(planner: &mut RoutePlanner) {
     planner.path.clear();
@@ -2348,7 +2906,7 @@ fn route_planning_input(
     mouse_button: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    ship_query: Query<(Entity, &Transform), With<LocalShip>>,
+    ship_query: Query<(Entity, &Transform, Option<&ShipClass>), With<LocalShip>>,
     route_query: Query<Entity, With<RouteFollowing>>,
 ) {
     let ctrl_held =
@@ -2370,7 +2928,7 @@ fn route_planning_input(
         planner.target_zoom = ROUTE_ZOOM_SCALE;
 
         // Placeholder start point (updated to actual position on release)
-        if let Ok((_entity, ship_tf)) = ship_query.single() {
+        if let Ok((_entity, ship_tf, _)) = ship_query.single() {
             planner.waypoints.push(ship_tf.translation.truncate());
         }
     }
@@ -2405,7 +2963,7 @@ fn route_planning_input(
         planner.target_zoom = zoom.scale;
 
         // Update start point to ship's current position (was placeholder from press)
-        if let Ok((_entity, ship_tf)) = ship_query.single() {
+        if let Ok((_entity, ship_tf, _)) = ship_query.single() {
             if !planner.waypoints.is_empty() {
                 planner.waypoints[0] = ship_tf.translation.truncate();
             }
@@ -2413,18 +2971,19 @@ fn route_planning_input(
         }
 
         if planner.path.len() >= 2
-            && let Ok((entity, _ship_tf)) = ship_query.single()
+            && let Ok((entity, _ship_tf, class)) = ship_query.single()
         {
+            let cfg = AutopilotConfig::for_class(class.copied().unwrap_or_default());
             let arc_lengths = compute_arc_lengths(&planner.path);
-            let speed_profile = compute_speed_profile(&planner.curvatures, &arc_lengths);
+            let speed_profile = compute_speed_profile(&planner.curvatures, &arc_lengths, &cfg);
 
             commands.entity(entity).insert(RouteFollowing {
                 path: planner.path.clone(),
                 curvatures: planner.curvatures.clone(),
-                arc_lengths,
                 speed_profile,
+                config: cfg,
                 progress: 0.0,
-                cte_integral: 0.0,
+                debug_tick: 0,
             });
         }
         planner.waypoints.clear();
@@ -2441,10 +3000,15 @@ fn route_planning_input(
 /// Smoothly animate camera zoom for route planning.
 fn route_zoom(
     mut planner: ResMut<RoutePlanner>,
+    zoom: Res<CameraZoom>,
     mut camera_query: Query<&mut Projection, With<Camera2d>>,
     time: Res<Time>,
 ) {
     let dt = time.delta_secs();
+    // When not route-planning, track the scroll zoom level
+    if !planner.active {
+        planner.target_zoom = zoom.scale;
+    }
     planner.current_zoom +=
         (planner.target_zoom - planner.current_zoom) * (ROUTE_ZOOM_SPEED * dt).min(1.0);
 
@@ -2559,7 +3123,96 @@ fn cross_track_error(path: &[Vec2], ship_pos: Vec2, progress: f32) -> f32 {
     (ship_pos - nearest).dot(normal)
 }
 
-/// Proportional autopilot with continuous throttle, rotation, strafe, and stabilize.
+/// Holds stabilize=1.0 between test routes until ship has stopped.  Remove when tuning is done.
+fn brake_between_routes(
+    test_routes: Res<TestRoutes>,
+    mut input_query: Query<&mut ActionState<ShipInput>, With<InputMarker<ShipInput>>>,
+    route_query: Query<(), With<RouteFollowing>>,
+    ship_query: Query<&LinearVelocity, With<LocalShip>>,
+) {
+    // Only brake when test is running and no route is active
+    if test_routes.current == 0 || test_routes.current >= test_routes.routes.len() {
+        return;
+    }
+    if route_query.single().is_ok() {
+        return;
+    }
+    let speed = ship_query.single().map(|v| v.0.length()).unwrap_or(0.0);
+    if speed < 5.0 {
+        return;
+    }
+    for mut action_state in input_query.iter_mut() {
+        action_state.0 = ShipInput {
+            stabilize: 1.0,
+            ..default()
+        };
+    }
+}
+
+/// Injects the next test route when ship has stopped.  Remove when tuning is done.
+fn inject_test_route(
+    mut commands: Commands,
+    mut test_routes: ResMut<TestRoutes>,
+    ship_query: Query<(Entity, &LinearVelocity, Option<&ShipClass>), With<LocalShip>>,
+    route_query: Query<(), With<RouteFollowing>>,
+) {
+    if test_routes.current >= test_routes.routes.len() {
+        return;
+    }
+    if route_query.single().is_ok() {
+        return; // still running a route
+    }
+    let Ok((entity, lin_vel, class)) = ship_query.single() else {
+        return;
+    };
+    // Wait for the configured class to spawn — the default Interceptor spawns first during
+    // the class-switch round-trip; injecting on it would use the wrong config.
+    let expected_class = ap_class_from_env();
+    if class.copied().unwrap_or_default() != expected_class {
+        return;
+    }
+    if lin_vel.0.length() > 30.0 {
+        return; // wait until nearly stopped
+    }
+
+    let route_idx = test_routes.current;
+    test_routes.current += 1;
+
+    // Absolute waypoints — use directly, no offset needed.
+    let waypoints: Vec<Vec2> = test_routes.routes[route_idx].clone();
+
+    let mut path = Vec::with_capacity(ROUTE_SAMPLE_COUNT);
+    for i in 0..ROUTE_SAMPLE_COUNT {
+        let t = i as f32 / (ROUTE_SAMPLE_COUNT - 1) as f32;
+        path.push(catmull_rom_sample(&waypoints, t));
+    }
+    let cfg = AutopilotConfig::for_class(class.copied().unwrap_or_default());
+    let curvatures = compute_curvatures(&path);
+    let arc_lengths = compute_arc_lengths(&path);
+    let speed_profile = compute_speed_profile(&curvatures, &arc_lengths, &cfg);
+
+    let total_arc = arc_lengths.last().copied().unwrap_or(0.0);
+    let max_k = curvatures.iter().cloned().fold(0.0f32, f32::max);
+    let min_spd = speed_profile.iter().cloned().fold(f32::MAX, f32::min);
+    let max_spd = speed_profile.iter().cloned().fold(0.0f32, f32::max);
+    eprint!("STARTING TEST ROUTE {} pts={} arc={:.0} max_k={:.5} spd={:.0}..{:.0} wps:",
+        route_idx + 1, path.len(), total_arc, max_k, min_spd, max_spd);
+    for wp in &waypoints {
+        eprint!(" ({:.0},{:.0})", wp.x, wp.y);
+    }
+    eprintln!();
+
+    commands.entity(entity).insert(RouteFollowing {
+        path,
+        curvatures,
+        speed_profile,
+        config: cfg,
+        progress: 0.0,
+        debug_tick: 0,
+    });
+}
+
+/// Velocity-vector tracking autopilot: targets desired_vel = tangent × speed_profile + CTE correction.
 fn route_follow(
     mut commands: Commands,
     mut ship_query: Query<
@@ -2609,150 +3262,416 @@ fn route_follow(
         return;
     }
 
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
     let ship_pos = ship_tf.translation.truncate();
     let speed = lin_vel.0.length();
 
-    // 1. Update progress (mutable write first, capped to prevent wild jumps)
+    // 1. Update progress (capped to prevent wild jumps on rollback)
     let proj = find_closest_on_path(&following.path, ship_pos, following.progress);
-    let max_advance = (speed * dt / 20.0).max(2.0); // ~max path indices per tick
+    let max_advance = (speed / 20.0).max(2.0);
     following.progress = proj
         .max(following.progress)
         .min(following.progress + max_advance);
-
-    // 2. Cross-track error (signed, positive = left of path)
-    let cte = cross_track_error(&following.path, ship_pos, following.progress);
-
-    // 3. Update CTE integral with anti-windup
-    let prev_sign = following.cte_integral.signum();
-    let cte_sign = cte.signum();
-    if prev_sign != 0.0 && cte_sign != 0.0 && prev_sign != cte_sign {
-        following.cte_integral = 0.0;
-    }
-    following.cte_integral = (following.cte_integral + cte * dt).clamp(-150.0, 150.0);
+    following.debug_tick += 1;
+    let debug_tick = following.debug_tick;
 
     let progress = following.progress;
-    let cte_integral = following.cte_integral;
     let path = &following.path;
-    let curvatures = &following.curvatures;
-    let arc_lengths = &following.arc_lengths;
 
     let tangent_here = path_tangent(path, progress);
-
-    // 4. PURE PURSUIT: look ahead along the path, aim directly at that point
-    //    When off-track, look further ahead for a gentler rejoin angle
-    let curvature_here = curvatures[progress as usize];
-    let look_ahead_base = (speed * LOOK_AHEAD_TIME).clamp(LOOK_AHEAD_MIN, LOOK_AHEAD_MAX);
-    let curvature_factor = (1.0 / (1.0 + curvature_here * 200.0)).clamp(0.4, 1.0);
-    // When off-track, look further ahead for smoother rejoin
-    let cte_boost = 1.0 + (cte.abs() / 40.0).min(1.0); // up to 2x look-ahead when off-track
-    let look_ahead_dist = look_ahead_base * curvature_factor * cte_boost;
-    let look_ahead_idx = advance_by_arc_length(arc_lengths, progress, look_ahead_dist).min(max_idx);
-    let look_ahead_pos = path_lerp(path, look_ahead_idx);
-
-    // 5. Desired heading: always aim at the look-ahead point (pure pursuit)
-    //    This naturally corrects cross-track error without needing blend tuning.
-    let to_target = look_ahead_pos - ship_pos;
-    let desired_angle = if to_target.length_squared() > 1.0 {
-        to_target.y.atan2(to_target.x)
-    } else {
-        tangent_here.y.atan2(tangent_here.x)
-    };
-
-    // 6. Heading error — derive from transform forward vector directly (robust)
-    let fwd_3d = ship_tf.rotation * Vec3::Y; // ship mesh Y+ = forward
-    let ship_heading = fwd_3d.y.atan2(fwd_3d.x);
-    let heading_err = wrap_angle(desired_angle - ship_heading);
-
-    // 7. ROTATION CONTROL: time-optimal with angular velocity damping
-    let alpha = SHIP_ANGULAR_DECEL;
-    let current_omega = _ang_vel.0;
-    let omega_fb = heading_err.signum() * (2.0 * alpha * heading_err.abs()).sqrt();
-    // Blend: target the time-optimal angular velocity, but damp current overshoot
-    let omega_error = omega_fb - current_omega;
-    let rotate = (omega_error / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
-
-    // 8. STRAFE: correct lateral drift when roughly aligned with path
     let path_normal = Vec2::new(-tangent_here.y, tangent_here.x);
-    let ship_right_3d = ship_tf.rotation * Vec3::X;
-    let ship_right = Vec2::new(ship_right_3d.x, ship_right_3d.y);
-    let normal_in_ship = path_normal.dot(ship_right);
+    let cte = cross_track_error(path, ship_pos, progress);
 
-    let lateral_vel = lin_vel.0.dot(path_normal);
-    let cte_in_ship_right = cte * normal_in_ship;
-    let integral_in_ship = cte_integral * normal_in_ship;
-
-    let k_p = 0.08;
-    let k_i = 0.010;
-    let k_d = 0.12;
-    let strafe_cmd =
-        k_p * cte_in_ship_right + k_i * integral_in_ship + k_d * lateral_vel * normal_in_ship;
-    // Only strafe when heading is roughly correct (within ±45°)
-    let alignment_scale = (1.0 - (heading_err.abs() / std::f32::consts::FRAC_PI_4)).clamp(0.0, 1.0);
-    let strafe = (strafe_cmd * alignment_scale).clamp(-1.0, 1.0);
-
-    // 9. SPEED FROM PRECOMPUTED PROFILE
+    // 2. Target speed from precomputed profile
     let speed_profile = &following.speed_profile;
     let idx_i = (progress as usize).min(speed_profile.len().saturating_sub(2));
     let idx_frac = progress - idx_i as f32;
-    let target_speed = speed_profile[idx_i]
-        + idx_frac
-            * (speed_profile[(idx_i + 1).min(speed_profile.len() - 1)] - speed_profile[idx_i]);
+    let target_speed_raw = speed_profile[idx_i]
+        + idx_frac * (speed_profile[(idx_i + 1).min(speed_profile.len() - 1)] - speed_profile[idx_i]);
 
-    // 10. VELOCITY ALIGNMENT — how much velocity is along the path tangent
-    let vel_alignment = if speed > 5.0 {
-        lin_vel.0.dot(tangent_here) / speed
-    } else {
-        1.0
-    };
-
-    // 10b. CTE speed reduction — brake when off-track for tighter tracking
-    let cte_speed_factor = (1.0 / (1.0 + (cte.abs() / 60.0).powi(2))).max(0.40);
-    let target_speed = target_speed * cte_speed_factor;
-
-    // 11. THRUST AND STABILIZE
-    let speed_error = target_speed - speed;
-    // Only gate thrust on heading — don't double-gate with alignment
-    let heading_factor = (1.0 - heading_err.abs() / std::f32::consts::FRAC_PI_3).clamp(0.0, 1.0);
-
+    // Build shared per-tick input struct
+    let fwd_3d = ship_tf.rotation * Vec3::Y; // ship mesh Y+ = forward
+    let ship_heading = fwd_3d.y.atan2(fwd_3d.x);
+    let ship_fwd = Vec2::new(fwd_3d.x, fwd_3d.y);
+    let ship_right_3d = ship_tf.rotation * Vec3::X;
+    let ship_right = Vec2::new(ship_right_3d.x, ship_right_3d.y);
     let remaining = remaining_arc_length(path, progress);
-    let stopping_dist = speed * speed / (2.0 * SHIP_STABILIZE_DECEL);
 
-    let thrust_forward = if speed_error > 0.0 && remaining > stopping_dist * 1.5 {
-        (speed_error / 60.0).clamp(0.0, 1.0) * heading_factor
-    } else {
-        0.0
+    let ap_input = AutopilotInput {
+        ship_fwd,
+        ship_right,
+        lin_vel: lin_vel.0,
+        speed,
+        current_omega: _ang_vel.0,
+        path,
+        progress,
+        cte,
+        tangent: tangent_here,
+        path_normal,
+        target_speed_raw,
+        remaining,
     };
 
-    // Brake when too fast or velocity is misaligned with path
-    let speed_excess = (speed - target_speed).max(0.0);
-    let sideslip_brake = if vel_alignment < 0.7 && speed > 15.0 {
-        (0.7 - vel_alignment) * 1.5
-    } else {
-        0.0
+    let cfg = &following.config;
+    let out = match cfg.algorithm {
+        AutopilotAlgorithm::VelocityVector => ap_velocity_vector(&ap_input, cfg, ship_heading),
+        AutopilotAlgorithm::ThrusterRotate => ap_thruster_rotate(&ap_input, cfg, ship_heading),
+        AutopilotAlgorithm::SniperPath => ap_sniper_path(&ap_input, cfg, ship_heading),
     };
-    let stabilize = ((speed_excess / 60.0) + sideslip_brake).clamp(0.0, 1.0);
 
-    // Compute aim angle from mouse cursor
+    // Aim angle from mouse cursor (weapons still track mouse during autopilot)
     let aim_angle = cursor_world_pos(&windows, &camera_query)
         .and_then(|world_pos| {
             let delta = world_pos - ship_pos;
             (delta.length_squared() > 1.0).then(|| delta.y.atan2(delta.x))
         })
-        .unwrap_or(desired_angle);
+        .unwrap_or(out.desired_angle);
+
+    // Periodic debug logging (every 30 ticks) — remove when tuning is done
+    if debug_tick % 30 == 0 {
+        let path_pos = path_lerp(path, progress);
+        eprintln!(
+            "AP t={} pos=({:.0},{:.0}) pp=({:.0},{:.0}) cte={:.1} spd={:.1}/{:.1}(raw={:.1}) \
+             hdg={:.3} fwd_err={:.1} lat_err={:.1} thr={:.2} stab={:.2} str={:.2} ab={} prg={:.1}",
+            debug_tick,
+            ship_pos.x, ship_pos.y, path_pos.x, path_pos.y,
+            cte, speed, out.target_speed, target_speed_raw, out.heading_err,
+            out.fwd_vel_error, out.lat_vel_error,
+            out.thrust_forward, out.stabilize, out.strafe, out.afterburner as u8,
+            progress,
+        );
+    }
 
     for mut action_state in input_query.iter_mut() {
         action_state.0 = ShipInput {
-            thrust_forward,
+            thrust_forward: out.thrust_forward,
             thrust_backward: 0.0,
-            rotate,
-            strafe,
-            afterburner: false,
-            stabilize,
+            rotate: out.rotate,
+            strafe: out.strafe,
+            afterburner: out.afterburner,
+            stabilize: out.stabilize,
             fire: mouse_button.pressed(MouseButton::Left),
             drop_mine: keypress.just_pressed(KeyCode::KeyX),
             aim_angle,
             class_request: 0,
         };
+    }
+}
+
+/// Velocity-vector tracking algorithm.
+/// Computes a desired velocity = path_tangent × speed + correction, then drives toward it.
+fn ap_velocity_vector(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f32) -> AutopilotOutput {
+    // CTE speed reduction
+    let cte_speed_factor = (1.0 / (1.0 + (i.cte.abs() / cfg.cte_divisor).powi(2))).max(cfg.cte_speed_floor);
+    let target_speed = i.target_speed_raw * cte_speed_factor;
+
+    // Desired velocity vector: tangent direction at target speed + lateral correction
+    let correction_speed = (-i.cte * cfg.correction_gain).clamp(-cfg.correction_cap, cfg.correction_cap);
+    let desired_vel = i.tangent * target_speed + i.path_normal * correction_speed;
+
+    // Heading: face the desired velocity (fallback to tangent at near-zero speed)
+    let desired_angle = if desired_vel.length_squared() > 100.0 {
+        desired_vel.y.atan2(desired_vel.x)
+    } else {
+        i.tangent.y.atan2(i.tangent.x)
+    };
+
+    // Rotation: time-optimal with angular velocity damping
+    let heading_err = wrap_angle(desired_angle - ship_heading);
+    let omega_fb = heading_err.signum() * (2.0 * SHIP_ANGULAR_DECEL * heading_err.abs()).sqrt();
+    let rotate = ((omega_fb - i.current_omega) / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
+
+    // Velocity error decomposed into ship frame
+    let vel_error = desired_vel - i.lin_vel;
+    let fwd_vel_error = vel_error.dot(i.ship_fwd);
+    let lat_vel_error = vel_error.dot(i.ship_right);
+
+    // Thrust: gated on heading alignment and remaining distance
+    let heading_factor = (1.0 - heading_err.abs() / std::f32::consts::FRAC_PI_3).clamp(0.0, 1.0);
+    let stopping_dist = i.speed * i.speed / (2.0 * SHIP_STABILIZE_DECEL);
+    let thrust_forward = if fwd_vel_error > 0.0 && i.remaining > stopping_dist * cfg.stopping_dist_margin {
+        (fwd_vel_error / cfg.vel_error_scale).clamp(0.0, 1.0) * heading_factor
+    } else {
+        0.0
+    };
+    let afterburner = fwd_vel_error > cfg.afterburner_fwd_threshold
+        && heading_factor > cfg.afterburner_heading_min
+        && i.cte.abs() < cfg.afterburner_cte_max;
+
+    // Braking: speed excess over desired magnitude
+    let speed_excess = (i.speed - desired_vel.length()).max(0.0);
+    let stabilize = (speed_excess / cfg.vel_error_scale).clamp(0.0, 1.0);
+
+    // Strafe: lateral velocity error (negated — physics applies -ship_right * strafe)
+    let strafe = -(lat_vel_error / cfg.vel_error_scale).clamp(-1.0, 1.0);
+
+    AutopilotOutput {
+        rotate,
+        thrust_forward,
+        stabilize,
+        strafe,
+        afterburner,
+        desired_angle,
+        target_speed,
+        heading_err,
+        fwd_vel_error,
+        lat_vel_error,
+    }
+}
+
+/// Rotation-first thruster algorithm.
+///
+/// Two modes selected per-tick:
+/// - Main-thrust mode (curves / acceleration): rotate to face delta_v (centripetal + correction),
+///   fire main thruster. Strafe is off (ship faces centripetally, strafe would act along tangent).
+/// - Tangent mode (near-straights / deceleration): face la_tangent, strafe corrects CTE.
+///   Triggered when delta_v is backward or negligible (no meaningful rotation needed).
+fn ap_thruster_rotate(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f32) -> AutopilotOutput {
+    let cte_speed_factor = (1.0 / (1.0 + (i.cte.abs() / cfg.cte_divisor).powi(2))).max(cfg.cte_speed_floor);
+    let target_speed = i.target_speed_raw * cte_speed_factor;
+
+    // Look-ahead tangent: advance along the path so the ship preemptively rotates into curves
+    // before it arrives at them rather than reacting after already going off-track.
+    let look_ahead_dist = (i.speed * cfg.look_ahead_time).clamp(cfg.look_ahead_min, cfg.look_ahead_max);
+    let local_step = if (i.progress as usize + 1) < i.path.len() {
+        (i.path[i.progress as usize + 1] - i.path[i.progress as usize]).length().max(1.0)
+    } else {
+        1.0
+    };
+    let la_progress = (i.progress + look_ahead_dist / local_step).min((i.path.len() - 1) as f32);
+    let la_tangent = path_tangent(i.path, la_progress);
+
+    // Desired velocity: la_tangent at target speed.
+    // la_tangent at the look-ahead is fully rotated into the curve; using it gives ~2× the
+    // centripetal component in delta_v vs to_la_norm (which is only the chord angle).
+    // More centripetal in delta_v → main thruster does the curve work, less strafe needed.
+    let desired_vel = la_tangent * target_speed;
+    let delta_v = desired_vel - i.lin_vel;
+
+    // Heading: face delta_v so the main thruster delivers centripetal + speed corrections.
+    // Clamp deviation from la_tangent to ±60°: this prevents the pathological heading when
+    // speed≈target but direction changes slightly (e.g. descent after apex — delta_v becomes
+    // nearly perpendicular to path → atan2 gives ~-97°), while still allowing large correction
+    // angles on curves where delta_v correctly points far from the tangent.
+    let desired_angle = if delta_v.length_squared() > 5.0 * 5.0 && delta_v.dot(la_tangent) >= 0.0 {
+        let tangent_angle = la_tangent.y.atan2(la_tangent.x);
+        let raw_angle = delta_v.y.atan2(delta_v.x);
+        let deviation = wrap_angle(raw_angle - tangent_angle);
+        tangent_angle + deviation.clamp(-std::f32::consts::FRAC_PI_3, std::f32::consts::FRAC_PI_3)
+    } else {
+        la_tangent.y.atan2(la_tangent.x)
+    };
+
+    // Rotation: bang-bang for large errors (full speed), proportional near target (no overshoot).
+    // K_p = ANGULAR_DECEL/4 = 5 gives critically-damped response for |err| < crossover.
+    // For |err| >= crossover = MAX_SPEED/K_p = 6/5 = 1.2 rad, just saturate at max omega.
+    let heading_err = wrap_angle(desired_angle - ship_heading);
+    let k_p = SHIP_ANGULAR_DECEL / 4.0; // 5.0
+    let crossover = SHIP_MAX_ANGULAR_SPEED / k_p; // 1.2 rad
+    let omega_fb = if heading_err.abs() >= crossover {
+        heading_err.signum() * SHIP_MAX_ANGULAR_SPEED
+    } else {
+        heading_err * k_p
+    };
+    let rotate = ((omega_fb - i.current_omega) / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
+
+    // Heading alignment gate
+    let heading_factor = (1.0 - heading_err.abs() / std::f32::consts::FRAC_PI_3).clamp(0.0, 1.0);
+
+    // Thrust: fires when there's a velocity deficit in the forward direction.
+    // No heading_factor gate — the ship fires thrust while rotating so the correction
+    // force is applied immediately, not only after the rotation completes.
+    let fwd_delta_v = delta_v.dot(i.ship_fwd);
+    let stopping_dist = i.speed * i.speed / (2.0 * SHIP_STABILIZE_DECEL);
+    let thrust_forward = if fwd_delta_v > 0.0 && i.remaining > stopping_dist * cfg.stopping_dist_margin {
+        (fwd_delta_v / cfg.vel_error_scale).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    // Only afterburn when below target speed — prevents overspeed on curve approaches where
+    // delta_v can have a large forward component even when total speed already exceeds target.
+    let afterburner = fwd_delta_v > cfg.afterburner_fwd_threshold
+        && heading_factor > cfg.afterburner_heading_min
+        && i.cte.abs() < cfg.afterburner_cte_max
+        && i.speed < target_speed;
+
+    // Stabilize: scalar speed excess gated by heading alignment.
+    // Suppressed while rotating to a new heading — firing retro-thrust while rotating would
+    // counteract the correction the rotation is setting up to deliver.
+    let stabilize = ((i.speed - target_speed).max(0.0) / cfg.vel_error_scale * heading_factor)
+        .clamp(0.0, 1.0);
+
+    // Strafe: CTE correction + lateral velocity damping.
+    // On curves with CTE≈0, strafe≈0 — centripetal force comes from the main thruster.
+    let lat_vel_path = i.lin_vel.dot(i.path_normal);
+    let cte_cmd = cfg.correction_gain * i.cte + cfg.correction_kd * lat_vel_path;
+    let strafe = -(cte_cmd / cfg.vel_error_scale).clamp(-1.0, 1.0);
+
+    let vel_error = desired_vel - i.lin_vel;
+    let fwd_vel_error = vel_error.dot(i.ship_fwd);
+    let lat_vel_error = vel_error.dot(i.ship_right);
+
+    AutopilotOutput {
+        rotate,
+        thrust_forward,
+        stabilize,
+        strafe,
+        afterburner,
+        desired_angle,
+        target_speed,
+        heading_err,
+        fwd_vel_error,
+        lat_vel_error,
+    }
+}
+
+/// Analytic path-tracking algorithm for the Sniper.
+///
+/// Design:
+///   ROTATION — driven by the future path *tangent* at a look-ahead point chosen so that
+///   the ship has exactly enough time to complete the rotation before arriving there.
+///   `look_ahead_time` is an early-start margin (e.g. 2.5 = start rotating when you still
+///   have 2.5× the minimum required time left), so the ship pre-rotates well before curves.
+///
+///   THRUST — gated on heading alignment AND on low path curvature ahead. The idea is to
+///   enter curves already at the right heading and let momentum carry through; thrust only
+///   on straight segments where it can efficiently accelerate the ship.
+///
+///   STRAFE — tiny lateral-velocity damping only; CTE is corrected by rotating toward the
+///   look-ahead position rather than strafing the ship sideways.
+fn ap_sniper_path(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f32) -> AutopilotOutput {
+    let cte_speed_factor =
+        (1.0 / (1.0 + (i.cte.abs() / cfg.cte_divisor).powi(2))).max(cfg.cte_speed_floor);
+    let target_speed = i.target_speed_raw * cte_speed_factor;
+
+    let max_idx = (i.path.len() - 1) as f32;
+    let local_step = if (i.progress as usize + 1) < i.path.len() {
+        (i.path[i.progress as usize + 1] - i.path[i.progress as usize])
+            .length()
+            .max(1.0)
+    } else {
+        1.0
+    };
+
+    // Reconstruct ship's actual world position from nearest path point + CTE offset.
+    let nearest_pos = path_lerp(i.path, i.progress);
+    let ship_pos = nearest_pos + i.path_normal * i.cte;
+
+    // --- Analytic look-ahead ---
+    //
+    // Scan [look_ahead_min, look_ahead_max] for each candidate la_prog:
+    //   rotation_angle = angle from current heading to path *tangent* at la_prog
+    //   rotation_time  = 2√(|Δθ| / SHIP_ANGULAR_DECEL)   (time-optimal bang-bang)
+    //   travel_time    = la_dist / speed
+    //
+    // Apply early-start margin (cfg.look_ahead_time): trigger when
+    //   rotation_time * margin ≥ travel_time
+    // so the ship begins rotating well before it's strictly necessary.
+    // Keep the furthest triggering point → pre-solves the most demanding upcoming curve.
+    //
+    // The rotation TARGET is the path tangent at la_prog (future heading geometry).
+    // The thrust TARGET is the direction toward la_pos from ship (CTE correction).
+    let min_la_prog = (i.progress + cfg.look_ahead_min / local_step).min(max_idx);
+    let min_la_tangent = path_tangent(i.path, min_la_prog);
+    let mut rot_target_angle = min_la_tangent.y.atan2(min_la_tangent.x);
+    let mut best_la_prog = min_la_prog;
+
+    let margin = cfg.look_ahead_time.max(1.0);
+    const SCAN_STEPS: usize = 24;
+    for k in 0..SCAN_STEPS {
+        let frac = (k + 1) as f32 / SCAN_STEPS as f32;
+        let la_dist = cfg.look_ahead_min + frac * (cfg.look_ahead_max - cfg.look_ahead_min);
+        let la_prog = (i.progress + la_dist / local_step).min(max_idx);
+        let la_tangent = path_tangent(i.path, la_prog);
+        let la_angle = la_tangent.y.atan2(la_tangent.x);
+
+        let heading_delta = wrap_angle(la_angle - ship_heading).abs();
+        let rot_time = 2.0 * (heading_delta / SHIP_ANGULAR_DECEL).sqrt();
+        let travel_time = la_dist / i.speed.max(10.0);
+
+        // Trigger early (margin > 1) so rotation starts with time to spare.
+        if rot_time * margin >= travel_time {
+            rot_target_angle = la_angle;
+            best_la_prog = la_prog;
+        }
+    }
+
+    // la_pos: the geometric look-ahead position on the path (used for thrust direction).
+    let la_pos = path_lerp(i.path, best_la_prog);
+    let to_la_vec = la_pos - ship_pos;
+    let to_la_angle = if to_la_vec.length_squared() > 1.0 {
+        to_la_vec.y.atan2(to_la_vec.x)
+    } else {
+        rot_target_angle
+    };
+
+    // When far from the path the tangent-based rot_target diverges from the direction
+    // needed to actually push the ship back. Blend smoothly: off-path → face la_pos
+    // so the thruster fires; on-path → face future tangent for pre-rotation.
+    let on_path_factor = (1.0 - (i.cte.abs() / 250.0)).clamp(0.0, 1.0);
+    let blended_angle = {
+        let diff = wrap_angle(rot_target_angle - to_la_angle);
+        to_la_angle + diff * on_path_factor
+    };
+
+    // Rotation: time-optimal with angular velocity damping, targeting blended angle.
+    let heading_err = wrap_angle(blended_angle - ship_heading);
+    let omega_fb = heading_err.signum() * (2.0 * SHIP_ANGULAR_DECEL * heading_err.abs()).sqrt();
+    let rotate = ((omega_fb - i.current_omega) / SHIP_MAX_ANGULAR_SPEED).clamp(-1.0, 1.0);
+
+    // Heading alignment gate (relative to blended target heading).
+    let heading_factor =
+        (1.0 - heading_err.abs() / std::f32::consts::FRAC_PI_3).clamp(0.0, 1.0);
+
+    // Curvature-based thrust gate: measure heading change between current tangent and
+    // la_tangent to detect upcoming curves. High upcoming curvature → reduce thrust so
+    // the ship enters curves on pre-built momentum rather than fighting with the thruster.
+    // Only apply when on-path (off-path, the ship needs full thrust to rejoin).
+    let current_tangent_angle = i.tangent.y.atan2(i.tangent.x);
+    let la_tangent_at_best = path_tangent(i.path, best_la_prog);
+    let la_tangent_angle = la_tangent_at_best.y.atan2(la_tangent_at_best.x);
+    let upcoming_turn = wrap_angle(la_tangent_angle - current_tangent_angle).abs();
+    let curve_thrust_factor = on_path_factor
+        * (1.0 - (upcoming_turn - 0.26) / 0.52).clamp(0.0, 1.0)
+        + (1.0 - on_path_factor); // off-path: always allow full thrust
+
+    // Thrust: forward component toward la_pos, gated by heading + curve + distance.
+    let to_la = to_la_vec.normalize_or_zero();
+    let desired_vel = to_la * target_speed;
+    let delta_v = desired_vel - i.lin_vel;
+    let fwd_delta_v = delta_v.dot(i.ship_fwd);
+    let stopping_dist = i.speed * i.speed / (2.0 * SHIP_STABILIZE_DECEL);
+    let thrust_forward =
+        if fwd_delta_v > 0.0 && i.remaining > stopping_dist * cfg.stopping_dist_margin {
+            (fwd_delta_v / cfg.vel_error_scale).clamp(0.0, 1.0) * heading_factor * curve_thrust_factor
+        } else {
+            0.0
+        };
+    let afterburner = fwd_delta_v > cfg.afterburner_fwd_threshold
+        && heading_factor > cfg.afterburner_heading_min
+        && curve_thrust_factor > 0.8
+        && i.cte.abs() < cfg.afterburner_cte_max;
+
+    // Stabilize: total speed excess, decoupled from heading.
+    let stabilize = ((i.speed - target_speed).max(0.0) / cfg.vel_error_scale).clamp(0.0, 1.0);
+
+    // Strafe: tiny lateral velocity damping only.
+    let lat_vel_path = i.lin_vel.dot(i.path_normal);
+    let strafe = -(cfg.correction_kd * lat_vel_path / cfg.correction_cap).clamp(-1.0, 1.0);
+
+    // Diagnostics
+    let fwd_vel_error = delta_v.dot(i.ship_fwd);
+    let lat_vel_error = delta_v.dot(i.ship_right);
+
+    AutopilotOutput {
+        rotate,
+        thrust_forward,
+        stabilize,
+        strafe,
+        afterburner,
+        desired_angle: blended_angle,
+        target_speed,
+        heading_err,
+        fwd_vel_error,
+        lat_vel_error,
     }
 }

@@ -26,7 +26,7 @@ use btl_shared::{
     TORPEDO_LIFETIME, TORPEDO_MAX_ACTIVE, TORPEDO_MUZZLE_OFFSET, TORPEDO_SPEED, TORPEDO_TURN_RATE,
     TURRET_COOLDOWN, TURRET_DAMAGE, TURRET_FIRE_TOLERANCE, TURRET_LIFETIME, TURRET_MOUNTS,
     TURRET_RANGE, TURRET_SLEW_RATE, TURRET_SPEED, Torpedo, ZONE_SCORE_RATE,
-    CollisionGrids,
+    CollisionGrids, FIXED_DT, MAX_ASTEROID_RADIUS, MAX_SHIP_RADIUS,
     generate_asteroid_layout, objective_zone_positions, ray_circle_intersect,
     CAPTURE_RATE, DAMAGE_FLASH_DURATION, DamageFlash, SpawnProtection, ship_radius,
     COLLISION_DAMAGE_VELOCITY_THRESHOLD, COLLISION_DAMAGE_PER_VELOCITY, COLLISION_FASTER_SHIP_MULT,
@@ -109,7 +109,7 @@ impl Plugin for ServerPlugin {
                 despawn_dead_ships,
                 despawn_orphaned_drones,
                 process_respawns,
-                collision_damage,
+                collision_damage.after(btl_shared::rebuild_collision_grids),
             ),
         );
         app.add_systems(
@@ -131,9 +131,9 @@ impl Plugin for ServerPlugin {
             (
                 zone_defense_management,
                 zone_factory_drones,
-                zone_factory_drone_ai,
-                zone_factory_drone_laser,
-                zone_factory_drone_kamikaze,
+                zone_factory_drone_ai.after(btl_shared::rebuild_collision_grids),
+                zone_factory_drone_laser.after(btl_shared::rebuild_collision_grids),
+                zone_factory_drone_kamikaze.after(btl_shared::rebuild_collision_grids),
                 zone_drone_death,
                 zone_railgun_ai,
                 zone_shield_deflect,
@@ -146,7 +146,11 @@ impl Plugin for ServerPlugin {
 }
 
 fn start_server(mut commands: Commands) {
-    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), SERVER_PORT);
+    let port = std::env::var("BTL_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(SERVER_PORT);
+    let server_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
 
     // Self-signed certificate for development
     let certificate = Identity::self_signed(["localhost", "127.0.0.1", "::1"])
@@ -230,7 +234,14 @@ fn handle_client_connected(
         trigger.entity
     );
 
-    let class = ShipClass::Interceptor;
+    // BTL_AP_CLASS env var overrides class for autopilot tuning (default: TorpedoBoat).
+    let class = match std::env::var("BTL_AP_CLASS").as_deref().unwrap_or("") {
+        "Sniper" | "sniper" => ShipClass::Sniper,
+        "Interceptor" | "interceptor" => ShipClass::Interceptor,
+        "Gunship" | "gunship" => ShipClass::Gunship,
+        "DroneCommander" | "dronecommander" | "drone_commander" => ShipClass::DroneCommander,
+        _ => ShipClass::TorpedoBoat,
+    };
 
     let ship = commands
         .spawn((
@@ -253,7 +264,12 @@ fn handle_client_connected(
 }
 
 /// Spawn static asteroid obstacles from the deterministic layout.
+/// Set `NO_ASTEROIDS=1` env var to skip (useful for autopilot testing).
 fn spawn_asteroids(mut commands: Commands) {
+    if std::env::var("NO_ASTEROIDS").is_ok() {
+        info!("NO_ASTEROIDS set — skipping asteroid spawn");
+        return;
+    }
     let layout = generate_asteroid_layout();
     for (pos, radius, rotation) in &layout {
         commands.spawn((
@@ -483,7 +499,7 @@ fn process_respawns(
     mut respawn_queue: ResMut<RespawnQueue>,
     scores_q: Query<&TeamScores>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let zone_states = scores_q
         .single()
         .map(|s| s.zones)
@@ -577,7 +593,7 @@ fn server_fire_laser(
     mut targets: Query<(Entity, &Position, &Team, &SpawnProtection, &mut Health, &mut DamageFlash, &mut LastDamagedBy)>,
     asteroids: Query<(&Position, &Asteroid)>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
 
     let mut hits: Vec<(Entity, f32, PeerId)> = Vec::with_capacity(8);
 
@@ -692,7 +708,7 @@ fn server_torpedo_homing(
     mut torpedoes: Query<(&Torpedo, &Position, &mut LinearVelocity)>,
     enemies: Query<(&Position, &Team), With<Health>>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
 
     for (torpedo, torp_pos, mut torp_vel) in torpedoes.iter_mut() {
         // Find nearest enemy
@@ -750,7 +766,7 @@ fn server_railgun(
         &mut Cloak,
     )>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
 
     for (input, player_id, team, class, pos, lin_vel, mut cooldown, mut charge, mut cloak) in
         ships.iter_mut()
@@ -823,7 +839,7 @@ fn server_cloak(
         &mut Cloak,
     )>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
 
     for (input, class, mut cloak) in query.iter_mut() {
         if *class != ShipClass::Sniper {
@@ -884,7 +900,7 @@ fn server_turret_ai(
     grids: Res<CollisionGrids>,
     mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
 
     for (player_id, team, class, ship_pos, ship_rot, ship_vel, mut turrets) in ships.iter_mut() {
         if turrets.mounts.is_empty() {
@@ -990,16 +1006,11 @@ fn server_turret_ai(
 /// Attach DroneSquad to newly spawned DroneCommander ships that don't have one yet.
 fn server_init_drone_squads(
     mut commands: Commands,
-    query: Query<Entity, (With<ShipClass>, Without<DroneSquad>)>,
-    classes: Query<&ShipClass>,
+    query: Query<(Entity, &ShipClass), Without<DroneSquad>>,
 ) {
-    for entity in query.iter() {
-        if let Ok(class) = classes.get(entity)
-            && *class == ShipClass::DroneCommander
-        {
-            commands
-                .entity(entity)
-                .insert(DroneSquad { respawn_timer: 0.0 });
+    for (entity, class) in query.iter() {
+        if *class == ShipClass::DroneCommander {
+            commands.entity(entity).insert(DroneSquad { respawn_timer: 0.0 });
         }
     }
 }
@@ -1009,20 +1020,22 @@ fn server_drone_respawn(
     mut commands: Commands,
     mut commanders: Query<(&PlayerId, &Team, &Position, &mut DroneSquad)>,
     existing_drones: Query<&Drone>,
+    mut counts: Local<std::collections::HashMap<PeerId, (usize, usize)>>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
+
+    // Build per-owner (laser, kamikaze) counts in one O(drones) pass.
+    counts.clear();
+    for d in existing_drones.iter() {
+        let entry = counts.entry(d.owner).or_default();
+        match d.kind {
+            DroneKind::Laser => entry.0 += 1,
+            DroneKind::Kamikaze => entry.1 += 1,
+        }
+    }
 
     for (player_id, team, pos, mut squad) in commanders.iter_mut() {
-        let mut laser_count = 0usize;
-        let mut kamikaze_count = 0usize;
-        for d in existing_drones.iter() {
-            if d.owner == player_id.0 {
-                match d.kind {
-                    DroneKind::Laser => laser_count += 1,
-                    DroneKind::Kamikaze => kamikaze_count += 1,
-                }
-            }
-        }
+        let (laser_count, kamikaze_count) = counts.get(&player_id.0).copied().unwrap_or((0, 0));
         let active_count = laser_count + kamikaze_count;
 
         if active_count >= DRONE_MAX_COUNT {
@@ -1070,7 +1083,7 @@ fn server_drone_ai(
     mut enemy_candidates: Local<Vec<(Entity, Vec2)>>,
     mut cmd_cache: Local<std::collections::HashMap<PeerId, (Vec2, Vec2)>>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let steer_rate = 6.0 * dt;
     let elapsed = time.elapsed_secs();
 
@@ -1258,7 +1271,7 @@ fn update_zone_scores(
         return;
     }
 
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let zones = objective_zone_positions();
     let r2 = OBJECTIVE_ZONE_RADIUS * OBJECTIVE_ZONE_RADIUS;
 
@@ -1334,7 +1347,7 @@ fn round_management(
         return;
     };
 
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
 
     match scores.round_state {
         RoundState::Playing => {}
@@ -1411,7 +1424,7 @@ fn zone_benefits(
         return;
     };
 
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let zones = objective_zone_positions();
     let r2 = OBJECTIVE_ZONE_RADIUS * OBJECTIVE_ZONE_RADIUS;
 
@@ -1485,7 +1498,8 @@ fn collision_damage(
         &mut Health,
         &mut DamageFlash,
     )>,
-    asteroids: Query<(&Position, &Asteroid)>,
+    grids: Res<CollisionGrids>,
+    mut ast_candidates: Local<Vec<(Vec2, f32)>>,
 ) {
     // Ship-asteroid collisions
     let mut ast_hits: Vec<(Entity, f32)> = Vec::with_capacity(8);
@@ -1499,9 +1513,11 @@ fn collision_damage(
             continue;
         }
         let speed = speed_sq.sqrt();
-        for (ast_pos, ast) in asteroids.iter() {
-            let hit_dist = r + ast.radius + 2.0;
-            if (pos.0 - ast_pos.0).length_squared() < hit_dist * hit_dist {
+        ast_candidates.clear();
+        grids.asteroids.for_each_candidate(pos.0, r + MAX_ASTEROID_RADIUS, |e| ast_candidates.push(e));
+        for &(ast_pos, ast_radius) in ast_candidates.iter() {
+            let hit_dist = r + ast_radius + 2.0;
+            if (pos.0 - ast_pos).length_squared() < hit_dist * hit_dist {
                 let damage = (speed - COLLISION_DAMAGE_VELOCITY_THRESHOLD) * COLLISION_DAMAGE_PER_VELOCITY;
                 ast_hits.push((entity, damage));
                 break;
@@ -1599,7 +1615,7 @@ fn zone_factory_drones(
         return;
     };
 
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let zones = objective_zone_positions();
 
     for (i, kind) in OBJECTIVE_KINDS.iter().enumerate() {
@@ -1685,9 +1701,11 @@ fn spawn_factory_drones(commands: &mut Commands, zone_index: usize, center: Vec2
 fn zone_factory_drone_ai(
     mut drones: Query<(Entity, &ZoneDrone, &Position, &mut LinearVelocity)>,
     enemies: Query<(&Position, &Team, &SpawnProtection), With<Health>>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
     time: Res<Time>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let steer_rate = 5.0 * dt;
     let elapsed = time.elapsed_secs();
     let zones = objective_zone_positions();
@@ -1703,11 +1721,14 @@ fn zone_factory_drone_ai(
             (elapsed * 1.7 + phase * 1.4).cos() * 60.0,
         );
 
-        // Find nearest enemy within aggro range
+        // Find nearest enemy within aggro range via spatial grid.
         let mut best_dist_sq = FACTORY_DRONE_AGGRO_RANGE * FACTORY_DRONE_AGGRO_RANGE;
         let mut nearest_enemy: Option<Vec2> = None;
 
-        for (enemy_pos, enemy_team, sp) in enemies.iter() {
+        candidates.clear();
+        grids.ships.for_each_candidate(drone_pos.0, FACTORY_DRONE_AGGRO_RANGE, |e| candidates.push(e));
+        for &(enemy_entity, _) in candidates.iter() {
+            let Ok((enemy_pos, enemy_team, sp)) = enemies.get(enemy_entity) else { continue; };
             if *enemy_team == drone.team || sp.remaining > 0.0 {
                 continue;
             }
@@ -1770,8 +1791,10 @@ fn orbit_zone(drone_pos: Vec2, center: Vec2, speed: f32, jitter: Vec2) -> Vec2 {
 fn zone_factory_drone_laser(
     drones: Query<(&ZoneDrone, &Position)>,
     mut enemies: Query<(Entity, &Position, &Team, &SpawnProtection, &mut Health, &mut DamageFlash)>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let range_sq = FACTORY_DRONE_LASER_RANGE * FACTORY_DRONE_LASER_RANGE;
 
     for (drone, drone_pos) in drones.iter() {
@@ -1779,11 +1802,14 @@ fn zone_factory_drone_laser(
             continue;
         }
 
-        // Single pass: find the nearest enemy entity in range.
+        // Find the nearest enemy entity in range via spatial grid.
         let mut best_dist_sq = range_sq;
         let mut best_entity: Option<Entity> = None;
 
-        for (entity, enemy_pos, enemy_team, sp, _, _) in enemies.iter() {
+        candidates.clear();
+        grids.ships.for_each_candidate(drone_pos.0, FACTORY_DRONE_LASER_RANGE, |e| candidates.push(e));
+        for &(entity, _) in candidates.iter() {
+            let Ok((_, enemy_pos, enemy_team, sp, _, _)) = enemies.get(entity) else { continue; };
             if *enemy_team == drone.team || sp.remaining > 0.0 {
                 continue;
             }
@@ -1809,19 +1835,28 @@ fn zone_factory_drone_laser(
 fn zone_factory_drone_kamikaze(
     mut commands: Commands,
     drones: Query<(Entity, &ZoneDrone, &Position)>,
-    mut enemies: Query<(&Position, &Team, &ShipClass, &SpawnProtection, &mut Health, &mut DamageFlash)>,
+    mut enemies: Query<(Entity, &Position, &Team, &ShipClass, &SpawnProtection, &mut Health, &mut DamageFlash)>,
+    grids: Res<CollisionGrids>,
+    mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
+    const ZONE_DRONE_RADIUS: f32 = 8.0;
     for (drone_entity, drone, drone_pos) in drones.iter() {
         if !matches!(drone.kind, DroneKind::Kamikaze) {
             continue;
         }
 
-        for (enemy_pos, enemy_team, class, sp, mut health, mut flash) in enemies.iter_mut() {
+        candidates.clear();
+        grids.ships.for_each_candidate(drone_pos.0, MAX_SHIP_RADIUS + ZONE_DRONE_RADIUS, |e| candidates.push(e));
+        for &(enemy_entity, _) in candidates.iter() {
+            let Ok((_, enemy_pos, enemy_team, class, sp, mut health, mut flash)) =
+                enemies.get_mut(enemy_entity)
+            else {
+                continue;
+            };
             if *enemy_team == drone.team || sp.remaining > 0.0 {
                 continue;
             }
-            let ship_r = ship_radius(class);
-            let hit_dist = ship_r + 8.0; // drone radius ~8
+            let hit_dist = ship_radius(class) + ZONE_DRONE_RADIUS;
             if (enemy_pos.0 - drone_pos.0).length_squared() < hit_dist * hit_dist {
                 health.current -= FACTORY_DRONE_KAMIKAZE_DAMAGE;
                 flash.timer = DAMAGE_FLASH_DURATION;
@@ -1852,7 +1887,7 @@ fn zone_railgun_ai(
     grids: Res<CollisionGrids>,
     mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
 
     for (mut turret, turret_pos) in turrets.iter_mut() {
         let range_sq = ZONE_RAILGUN_RANGE * ZONE_RAILGUN_RANGE;
