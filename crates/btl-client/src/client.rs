@@ -1916,7 +1916,10 @@ struct VictoryStatsText;
 struct VictoryCountdownText;
 
 #[derive(Component)]
-struct KillFeedText;
+struct KillFeedContainer;
+
+#[derive(Component)]
+struct KillFeedEntry;
 
 type HealthBarFilter = (
     With<HealthBarFill>,
@@ -2268,19 +2271,19 @@ fn spawn_victory_overlay(mut commands: Commands) {
     ));
 }
 
-/// Spawn a kill feed text node in the top-right corner.
+/// Spawn the kill feed container in the top-right corner.
 fn spawn_kill_feed(mut commands: Commands) {
     commands.spawn((
-        KillFeedText,
+        KillFeedContainer,
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(58.0),
             right: Val::Px(12.0),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexEnd,
+            row_gap: Val::Px(2.0),
             ..default()
         },
-        Text::new(""),
-        TextFont { font_size: 13.0, ..default() },
-        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
         GlobalZIndex(100),
     ));
 }
@@ -2378,47 +2381,56 @@ fn update_victory_overlay(
     }
 }
 
-/// Update kill feed text from the replicated TeamScores kill_feed.
+/// Rebuild the kill feed rows with team-colored spans when the feed changes.
 fn update_kill_feed(
+    mut commands: Commands,
     scores_q: Query<Ref<TeamScores>>,
-    mut feed_q: Query<&mut Text, With<KillFeedText>>,
+    container_q: Query<Entity, With<KillFeedContainer>>,
+    entries_q: Query<Entity, With<KillFeedEntry>>,
 ) {
-    let Ok(scores) = scores_q.single() else {
-        return;
-    };
-    if !scores.is_changed() {
-        return;
+    let Ok(scores) = scores_q.single() else { return; };
+    if !scores.is_changed() { return; }
+    let Ok(container) = container_q.single() else { return; };
+
+    // Despawn old rows.
+    for e in entries_q.iter() {
+        commands.entity(e).despawn();
     }
-    let Ok(mut text) = feed_q.single_mut() else {
-        return;
-    };
-    if scores.kill_feed.is_empty() {
-        **text = "".into();
-        return;
+
+    let font = TextFont { font_size: 13.0, ..default() };
+    let dim = Color::srgba(0.85, 0.85, 0.85, 0.6);
+
+    for event in scores.kill_feed.iter() {
+        let (killer_label, killer_color) = match event.killer_team {
+            Team::Red => ("RED", Color::srgba(1.0, 0.35, 0.35, 0.95)),
+            Team::Blue => ("BLU", Color::srgba(0.35, 0.6, 1.0, 0.95)),
+        };
+        let (victim_label, victim_color) = match event.victim_team {
+            Team::Red => ("RED", Color::srgba(0.9, 0.25, 0.25, 0.7)),
+            Team::Blue => ("BLU", Color::srgba(0.25, 0.5, 0.9, 0.7)),
+        };
+        let class_label = match event.victim_class {
+            ShipClass::Interceptor => "Interceptor",
+            ShipClass::Gunship => "Gunship",
+            ShipClass::TorpedoBoat => "Torpedo",
+            ShipClass::Sniper => "Sniper",
+            ShipClass::DroneCommander => "Carrier",
+        };
+
+        // Row container (right-aligned).
+        let row = commands.spawn((
+            KillFeedEntry,
+            Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, ..default() },
+        )).id();
+
+        let s0 = commands.spawn((Text::new(killer_label), font.clone(), TextColor(killer_color), ChildOf(row))).id();
+        let s1 = commands.spawn((Text::new(" → "),         font.clone(), TextColor(dim),          ChildOf(row))).id();
+        let s2 = commands.spawn((Text::new(victim_label), font.clone(), TextColor(victim_color), ChildOf(row))).id();
+        let s3 = commands.spawn((Text::new(format!(" {}", class_label)), font.clone(), TextColor(dim), ChildOf(row))).id();
+        let _ = (s0, s1, s2, s3); // suppress unused warnings
+
+        commands.entity(container).add_child(row);
     }
-    let lines: Vec<String> = scores
-        .kill_feed
-        .iter()
-        .map(|e| {
-            let killer = match e.killer_team {
-                Team::Red => "RED",
-                Team::Blue => "BLU",
-            };
-            let victim = match e.victim_team {
-                Team::Red => "RED",
-                Team::Blue => "BLU",
-            };
-            let class = match e.victim_class {
-                ShipClass::Interceptor => "Interceptor",
-                ShipClass::Gunship => "Gunship",
-                ShipClass::TorpedoBoat => "Torpedo",
-                ShipClass::Sniper => "Sniper",
-                ShipClass::DroneCommander => "Carrier",
-            };
-            format!("{} → {} {}", killer, victim, class)
-        })
-        .collect();
-    **text = lines.join("\n");
 }
 
 /// Update score HUD from replicated TeamScores.
