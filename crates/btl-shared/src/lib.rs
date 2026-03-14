@@ -261,6 +261,9 @@ pub const DRONE_DETONATION_RADIUS: f32 = 80.0;
 /// Damage dealt by each detonating drone to nearby enemy ships.
 pub const DRONE_DETONATION_DAMAGE: f32 = 25.0;
 
+/// Fixed timestep delta time in seconds (1 / FIXED_TIMESTEP_HZ).
+pub const FIXED_DT: f32 = 1.0 / FIXED_TIMESTEP_HZ as f32;
+
 // --- Map constants ---
 
 pub const MAP_RADIUS: f32 = 10000.0;
@@ -312,7 +315,7 @@ pub const FACTORY_LASER_DRONES: usize = 7;
 pub const FACTORY_KAMIKAZE_DRONES: usize = 4;
 pub const FACTORY_DRONE_HEALTH: f32 = 15.0;
 pub const FACTORY_DRONE_SPEED: f32 = 180.0;
-pub const FACTORY_DRONE_ORBIT_RADIUS: f32 = 200.0;
+pub const FACTORY_DRONE_ORBIT_RADIUS: f32 = OBJECTIVE_ZONE_RADIUS;
 pub const FACTORY_DRONE_AGGRO_RANGE: f32 = 500.0;
 pub const FACTORY_DRONE_LASER_RANGE: f32 = 250.0;
 pub const FACTORY_DRONE_LASER_DPS: f32 = 8.0;
@@ -376,7 +379,7 @@ pub fn tridrant_boundary_angles() -> [f32; 3] {
 
 // --- Asteroid constants ---
 
-pub const ASTEROID_COUNT: usize = 80;
+pub const ASTEROID_COUNT: usize = 32;
 pub const ASTEROID_SEED: u64 = 0xA57E_B01D;
 /// Min distance from center — keep spawn area clear
 const ASTEROID_MIN_DIST: f32 = 800.0;
@@ -787,7 +790,7 @@ fn apply_ship_input(
 ) {
     for (input, rotation, fuel, class, mut lin_vel, mut ang_vel) in query.iter_mut() {
         let input = &input.0;
-        let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+        let dt = FIXED_DT;
         let forward = *rotation * Vec2::Y;
         let right = *rotation * Vec2::X;
 
@@ -891,7 +894,7 @@ fn tick_cooldown<
 >(
     mut query: Query<&mut T>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for mut cd in query.iter_mut() {
         if cd.remaining > 0.0 {
             cd.remaining = (cd.remaining - dt).max(0.0);
@@ -904,7 +907,7 @@ fn update_projectile_lifetime(
     mut commands: Commands,
     mut query: Query<(Entity, &mut Projectile, &mut Position, &LinearVelocity)>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for (entity, mut proj, mut pos, vel) in query.iter_mut() {
         // Move projectile (no physics engine — simple linear movement)
         pos.0 += vel.0 * dt;
@@ -922,7 +925,7 @@ fn update_mine_lifetime(
     mut mines: Query<(Entity, &mut Mine, &Position)>,
     mut ships: Query<(&Position, &Team, &SpawnProtection, &mut Health, &mut DamageFlash, &mut LastDamagedBy)>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let trigger_dist_sq = MINE_TRIGGER_RADIUS * MINE_TRIGGER_RADIUS;
 
     for (entity, mut mine, mine_pos) in mines.iter_mut() {
@@ -949,7 +952,7 @@ fn update_mine_lifetime(
 /// Consume fuel while afterburner is active, regenerate when inactive.
 /// Sniper uses afterburner input for cloak toggle — no fuel burn.
 fn update_fuel(mut query: Query<(&ActionState<ShipInput>, &ShipClass, &mut Fuel)>) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for (input, class, mut fuel) in query.iter_mut() {
         // Sniper repurposes afterburner for cloak — skip fuel burn
         let burning = input.0.afterburner && *class != ShipClass::Sniper && fuel.current > 0.0;
@@ -963,7 +966,7 @@ fn update_fuel(mut query: Query<(&ActionState<ShipInput>, &ShipClass, &mut Fuel)
 
 /// Passive ammo regeneration (rate depends on ship class).
 fn update_ammo(mut query: Query<(&ShipClass, &mut Ammo)>) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for (class, mut ammo) in query.iter_mut() {
         let regen = match class {
             ShipClass::Interceptor => AMMO_REGEN_RATE,
@@ -1072,7 +1075,7 @@ pub fn check_mine_detonations(
 
 /// Tick down spawn protection timer.
 fn tick_spawn_protection(mut query: Query<&mut SpawnProtection>) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for mut sp in query.iter_mut() {
         if sp.remaining > 0.0 {
             sp.remaining = (sp.remaining - dt).max(0.0);
@@ -1082,7 +1085,7 @@ fn tick_spawn_protection(mut query: Query<&mut SpawnProtection>) {
 
 /// Tick down damage flash timer.
 fn tick_damage_flash(mut query: Query<&mut DamageFlash>) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for mut flash in query.iter_mut() {
         if flash.timer > 0.0 {
             flash.timer = (flash.timer - dt).max(0.0);
@@ -1219,12 +1222,74 @@ pub fn ray_circle_intersect(origin: Vec2, dir: Vec2, center: Vec2, radius: f32) 
     }
 }
 
+/// Compute the world-space lead point to aim at to intercept a moving target,
+/// accounting for the shooter's own velocity (projectiles inherit ship velocity on spawn).
+///
+/// Solves for flight time `t` from the quadratic:
+///   `(speed² - |v_rel|²)·t² - 2·(d·v_rel)·t - |d|² = 0`
+/// where `d = target_pos - own_pos` and `v_rel = target_vel - own_vel`.
+///
+/// Returns `None` when no future intercept exists (target escapes the projectile).
+pub fn compute_intercept(
+    own_pos: Vec2,
+    own_vel: Vec2,
+    target_pos: Vec2,
+    target_vel: Vec2,
+    projectile_speed: f32,
+) -> Option<Vec2> {
+    let d = target_pos - own_pos;
+    let v_rel = target_vel - own_vel;
+
+    let a = projectile_speed * projectile_speed - v_rel.length_squared();
+    let b = -2.0 * d.dot(v_rel);
+    let c = -d.length_squared();
+
+    let t = if a.abs() < 1.0 {
+        // Degenerate: projectile speed ≈ relative closing speed → linear equation.
+        if b.abs() < 1e-6 {
+            return None;
+        }
+        -c / b
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc < 0.0 {
+            return None;
+        }
+        let sq = disc.sqrt();
+        let t1 = (-b - sq) / (2.0 * a);
+        let t2 = (-b + sq) / (2.0 * a);
+        match (t1 > 0.0, t2 > 0.0) {
+            (true, true) => t1.min(t2),
+            (false, true) => t2,
+            (true, false) => t1,
+            _ => return None,
+        }
+    };
+
+    if t <= 0.0 {
+        return None;
+    }
+    Some(target_pos + target_vel * t)
+}
+
+/// Projectile speed for the player-aimed primary weapon of each class.
+/// Returns `None` for TorpedoBoat (continuous laser) and DroneCommander (AI turrets),
+/// which don't have a ballistic player-aimed primary.
+pub fn primary_projectile_speed(class: ShipClass) -> Option<f32> {
+    match class {
+        ShipClass::Interceptor => Some(AUTOCANNON_SPEED),
+        ShipClass::Gunship => Some(HEAVY_CANNON_SPEED),
+        ShipClass::Sniper => Some(RAILGUN_SPEED),
+        ShipClass::TorpedoBoat | ShipClass::DroneCommander => None,
+    }
+}
+
 /// Tick torpedo lifetime, move torpedoes, and despawn expired ones.
 pub fn update_torpedo_lifetime(
     mut commands: Commands,
     mut query: Query<(Entity, &mut Torpedo, &mut Position, &LinearVelocity)>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for (entity, mut torp, mut pos, vel) in query.iter_mut() {
         pos.0 += vel.0 * dt;
         torp.lifetime -= dt;
@@ -1257,7 +1322,7 @@ pub fn check_torpedo_shootdown(
 
 /// Move drones by their velocity (no physics engine).
 fn update_drone_positions(mut query: Query<(&mut Position, &LinearVelocity), With<Drone>>) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     for (mut pos, vel) in query.iter_mut() {
         pos.0 += vel.0 * dt;
     }
@@ -1341,7 +1406,7 @@ pub fn drone_laser_damage(
     grids: Res<CollisionGrids>,
     mut candidates: Local<Vec<(Entity, Vec2)>>,
 ) {
-    let dt = 1.0 / FIXED_TIMESTEP_HZ as f32;
+    let dt = FIXED_DT;
     let range_sq = DRONE_LASER_RANGE * DRONE_LASER_RANGE;
     let elapsed = time.elapsed_secs();
 
