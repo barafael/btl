@@ -24,8 +24,8 @@ use btl_shared::{
     SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS, SpawnProtection, TBOAT_MASS,
     TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo,
     ZoneDrone, ZoneRailgun, ZoneShield,
-    FACTORY_DRONE_LASER_RANGE, ZONE_SHIELD_RADIUS, RailgunTurretState,
-    ROUND_RESTART_COUNTDOWN,
+    FACTORY_DRONE_LASER_RANGE, OBJECTIVE_ZONE_RADIUS, ZONE_SHIELD_RADIUS, RailgunTurretState,
+    ROUND_RESTART_COUNTDOWN, objective_zone_positions,
     compute_intercept, drone_laser_firing, primary_projectile_speed, ray_circle_intersect,
 };
 
@@ -691,6 +691,7 @@ impl Plugin for ClientPlugin {
                 update_hud,
                 update_score_hud,
                 update_zone_colors,
+                render_zone_capture_arcs,
             ),
         );
         app.add_systems(
@@ -2473,6 +2474,48 @@ fn update_zone_colors(
         } else {
             // Neutral
             sprite.color = Color::srgba(0.4, 0.4, 0.2, 0.5);
+        }
+    }
+}
+
+/// Draw a filled arc inside each objective zone ring showing capture progress.
+///
+/// Arc span = |progress| × 360°, centered at the top of the ring.
+/// Colored red or blue depending on which team is ahead.
+fn render_zone_capture_arcs(
+    scores_q: Query<&TeamScores>,
+    mut gizmos: Gizmos,
+) {
+    let Ok(scores) = scores_q.single() else { return; };
+    let zones = objective_zone_positions();
+
+    for (i, &center) in zones.iter().enumerate() {
+        let progress = scores.zones[i].progress;
+        if progress.abs() < 0.02 {
+            continue;
+        }
+
+        let arc_span = progress.abs() * std::f32::consts::TAU;
+        // Center the arc at the top (12 o'clock). Arc sweeps CCW from start_angle.
+        let start_angle = std::f32::consts::FRAC_PI_2 + arc_span * 0.5;
+        let iso = Isometry2d::new(center, Rot2::radians(start_angle));
+
+        let t = progress.abs();
+        let (r, g, b) = if progress < 0.0 {
+            (0.85, 0.1, 0.1)
+        } else {
+            (0.1, 0.25, 0.85)
+        };
+
+        // Multiple concentric arcs create a "thick fill" appearance.
+        // Opacity scales with progress so a nearly-captured zone is vivid.
+        let inner = OBJECTIVE_ZONE_RADIUS * 0.55;
+        let outer = OBJECTIVE_ZONE_RADIUS * 0.88;
+        let steps = 8u32;
+        for s in 0..=steps {
+            let radius = inner + (outer - inner) * (s as f32 / steps as f32);
+            let alpha = (0.06 + 0.18 * t) * (1.0 - (s as f32 / steps as f32 - 0.5).abs() * 0.8);
+            gizmos.arc_2d(iso, arc_span, radius, Color::srgba(r, g, b, alpha));
         }
     }
 }
