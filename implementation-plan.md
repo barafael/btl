@@ -199,25 +199,21 @@ All implemented and active when inside a friendly-controlled zone:
 
 ## Phase 5: Polish
 
-### 5.1 Combat Feedback ❌
+### 5.1 Combat Feedback ✅
 
-Missing visual effects for high-impact moments:
-
-- [x] Damage flash: white overlay on ship when hit (DamageFlash component, fully implemented)
-- [x] Collision damage: velocity-threshold system, faster ship takes multiplied damage
-- [x] Railgun beam: bright 14000px line in fire direction, fades quadratically over 0.15s (team-colored)
-- [ ] Shield impact ripple: expanding ring at projectile contact point on Powerplant shield
-- [x] Screen shake: 0.2s decaying sinusoidal shake triggered by DamageFlash on local ship
+- [x] Damage flash: white overlay on ship when hit
+- [x] Collision damage: velocity-threshold system
+- [x] Railgun beam: 14000px team-colored line, quadratic fade over 0.15s
+- [x] Shield impact ripple: expanding dual-ring gizmo at bounce contact point
+- [x] Screen shake: 0.2s decaying sinusoidal shake on local ship hit
 - [ ] Heavy cannon smoke trail: ~0.3s fading orange trail behind Gunship projectile
-- [ ] Torpedo lock-on indicator: flashing red diamond above the targeted ship
+- [ ] Torpedo lock-on indicator: flashing red diamond above targeted ship
 
-### 5.2 Readability ❌
+### 5.2 Readability ✅
 
-Small additions that make the game state legible at a glance:
-
-- [ ] Kill feed: scrolling event log (top-left or top-right), shows "Player A killed Player B" with class icons
-- [ ] Team labels: name tag above each ship, team-colored, fades near screen edge
-- [ ] Zone capture arc: filled arc inside zone ring showing progress toward next controller flip (currently only ring color changes)
+- [x] Kill feed: top-right scrolling log, team-colored spans (RED/BLU labels)
+- [x] Team labels: world-space sprite above each ship, team-colored, upright
+- [x] Zone capture arc: filled radial arc inside zone ring, scales with progress
 - [ ] Team color indicators on HUD bars (health bar tinted to team color)
 
 ### 5.3 Fog of War ❌
@@ -230,17 +226,17 @@ Adds strategic depth; minimap becomes meaningful information asymmetry:
 - Objective zones always visible (fixed known locations)
 - Enemies outside sensor range: hidden from minimap, still visible in main view if on-screen
 
-### 5.4 Audio ❌
+### 5.4 Audio ✅
 
-No audio exists. This is the largest remaining effort:
-
-- Engine hum: looping tone, pitch scales with speed
-- Weapon sounds per type: autocannon rapid rattle, heavy cannon boom, laser sustained hum, torpedo whoosh, railgun charge whine + crack
-- Explosion variants: ship destruction (large), torpedo detonation (medium), mine detonation (sharp)
-- Ambient: low background drone
-- Zone events: rising capture tone, alert sting on zone flip
-- Powerplant: energy crackle on shield impact
-- UI: class selection click, respawn chime
+- [x] Engine hum: looping, pitch 0.55–1.4× with local ship speed
+- [x] Ambient drone: always-on 8s loop at 8% volume
+- [x] Weapon sounds: autocannon, heavy cannon, laser loop, torpedo whoosh, railgun charge + fire
+- [x] Explosions: ship death (large), torpedo/mine (medium) — RemovedComponents detection
+- [x] Zone events: capture ding at 95% progress, flip sting on ownership change
+- [x] Respawn chime: on subsequent local ship spawns
+- [x] btl-sfx-gen: standalone generator crate, all sounds synthesized from pure math (LCG noise, IIR lowpass, waveform math)
+- [ ] Shield impact crackle (Powerplant)
+- [ ] Class selection click
 
 ---
 
