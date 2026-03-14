@@ -1,16 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use avian2d::prelude::LinearVelocity;
 use bevy::prelude::*;
 
 use btl_protocol::{Drone, Mine, PlayerId, Projectile, ProjectileKind, Team};
-use btl_shared::Position;
+use btl_shared::{Position, ZoneShield, ZONE_SHIELD_RADIUS};
 
 pub struct EffectsPlugin;
 
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EntityPositionCache>();
+        app.init_resource::<RippleTriggered>();
         app.insert_resource(EffectRng(btl_shared::rng::Rng::new(0xEFFE_C700_DEAD_CAFE)));
         app.add_systems(
             Update,
@@ -24,6 +25,8 @@ impl Plugin for EffectsPlugin {
                 update_effect_particles,
                 update_flash_effects,
                 update_railgun_beams,
+                detect_shield_impacts,
+                update_shield_ripples,
             ),
         );
     }
@@ -60,6 +63,21 @@ struct FlashEffect {
 struct RailgunBeam {
     timer: f32,
 }
+
+/// Expanding ring ripple spawned when a projectile hits the Powerplant shield.
+#[derive(Component)]
+struct ShieldRipple {
+    timer: f32,
+    duration: f32,
+    center: Vec2,
+    max_radius: f32,
+    color: LinearRgba,
+}
+
+/// Tracks which projectile entities have already triggered a shield ripple
+/// so we don't re-fire every frame while the projectile is near the surface.
+#[derive(Resource, Default)]
+struct RippleTriggered(HashSet<Entity>);
 
 /// Runs BEFORE cache update — uses last frame's cache to detect despawns.
 fn detect_despawned_effects(
@@ -512,6 +530,92 @@ fn update_flash_effects(
         }
         if let Some(ref mut size) = sprite.custom_size {
             *size *= 0.85;
+        }
+    }
+}
+
+/// Detect enemy projectiles that have just bounced off a Powerplant shield and
+/// spawn an expanding ripple ring at the contact point.
+///
+/// Detection heuristic: projectile is within ±40 units of the shield surface
+/// and its velocity points *away* from the shield center (was already deflected).
+fn detect_shield_impacts(
+    mut commands: Commands,
+    shields: Query<(&ZoneShield, &Position)>,
+    projectiles: Query<(Entity, &Projectile, &Position, &LinearVelocity)>,
+    mut triggered: ResMut<RippleTriggered>,
+) {
+    let r = ZONE_SHIELD_RADIUS;
+
+    for (shield, shield_pos) in shields.iter() {
+        if !shield.active {
+            continue;
+        }
+        for (proj_entity, proj, proj_pos, proj_vel) in projectiles.iter() {
+            // Only enemy projectiles interact with this shield.
+            if proj.owner_team == shield.team {
+                continue;
+            }
+            let to_center = shield_pos.0 - proj_pos.0;
+            let dist = to_center.length();
+
+            // Near the surface + moving outward (positive dot means moving toward center,
+            // negative means away — i.e. already bounced).
+            if (dist - r).abs() < 40.0 && proj_vel.0.dot(to_center) < 0.0 {
+                if triggered.0.insert(proj_entity) {
+                    // Contact point projected onto the shield surface.
+                    let outward = if dist > 0.0 { (proj_pos.0 - shield_pos.0) / dist } else { Vec2::X };
+                    let contact = shield_pos.0 + outward * r;
+
+                    let color = match shield.team {
+                        Team::Red => LinearRgba::new(1.4, 0.45, 0.2, 0.85),
+                        Team::Blue => LinearRgba::new(0.3, 0.75, 1.8, 0.85),
+                    };
+                    commands.spawn(ShieldRipple {
+                        timer: 0.55,
+                        duration: 0.55,
+                        center: contact,
+                        max_radius: 100.0,
+                        color,
+                    });
+                }
+            }
+        }
+    }
+
+    // Purge entities that have despawned so the set doesn't grow unbounded.
+    triggered.0.retain(|&e| projectiles.get(e).is_ok());
+}
+
+/// Animate and render shield impact ripples as expanding, fading gizmo rings.
+fn update_shield_ripples(
+    mut commands: Commands,
+    mut ripples: Query<(Entity, &mut ShieldRipple)>,
+    mut gizmos: Gizmos,
+    time: Res<Time>,
+) {
+    let dt = time.delta_secs();
+    for (entity, mut ripple) in ripples.iter_mut() {
+        ripple.timer -= dt;
+        if ripple.timer <= 0.0 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+
+        // t: 0 = just spawned, 1 = fully expired
+        let t = 1.0 - ripple.timer / ripple.duration;
+        let radius = ripple.max_radius * t;
+        let alpha = ripple.color.alpha * (1.0 - t * t); // quadratic fade
+
+        let c = ripple.color;
+        gizmos.circle_2d(ripple.center, radius, Color::LinearRgba(LinearRgba::new(c.red, c.green, c.blue, alpha)));
+
+        // Trailing secondary ring at 60% radius for a wave-train feel.
+        let t2 = (t - 0.15).max(0.0);
+        let r2 = ripple.max_radius * t2;
+        let a2 = c.alpha * (1.0 - (t2 * 1.3).min(1.0).powi(2)) * 0.45;
+        if a2 > 0.01 {
+            gizmos.circle_2d(ripple.center, r2, Color::LinearRgba(LinearRgba::new(c.red, c.green, c.blue, a2)));
         }
     }
 }
