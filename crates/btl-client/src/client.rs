@@ -17,11 +17,11 @@ use avian2d::prelude::*;
 
 use btl_protocol::*;
 use btl_shared::{
-    Ammo, Asteroid, Cloak, DCOMMANDER_MASS, DCOMMANDER_RADIUS, DAMAGE_FLASH_DURATION,
+    Ammo, Asteroid, Cloak, DAMAGE_FLASH_DURATION,
     DamageFlash, DEFENSE_TURRET_MOUNTS, DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind,
-    FrameInterpolate, GUNSHIP_MASS, GUNSHIP_RADIUS, LASER_RANGE, MINE_RADIUS,
+    FrameInterpolate, LASER_RANGE, MINE_RADIUS,
     MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position, Projectile, RailgunCharge, Rotation,
-    SHIP_MASS, SHIP_RADIUS, SNIPER_MASS, SNIPER_RADIUS, SpawnProtection, TBOAT_MASS,
+    SHIP_RADIUS, ship_mass, ship_radius, ship_class_from_env, SpawnProtection,
     TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo,
     ZoneDrone, ZoneRailgun, ZoneShield,
     FACTORY_DRONE_LASER_RANGE, OBJECTIVE_ZONE_RADIUS, ZONE_SHIELD_RADIUS, RailgunTurretState,
@@ -41,7 +41,7 @@ fn cursor_world_pos(
     camera.viewport_to_world_2d(cam_gt, cursor_pos).ok()
 }
 
-fn team_color(team: &Team) -> Color {
+pub(crate) fn team_color(team: &Team) -> Color {
     match team {
         Team::Red => Color::srgb(1.0, 0.3, 0.3),
         Team::Blue => Color::srgb(0.3, 0.3, 1.0),
@@ -109,36 +109,40 @@ fn spawn_gun_barrel(commands: &mut Commands, parent: Entity, pivot_y: f32) {
     ));
 }
 
-fn spawn_defense_turret_barrels(commands: &mut Commands, parent: Entity) {
-    for (i, mount) in DEFENSE_TURRET_MOUNTS.iter().enumerate() {
+fn spawn_turret_barrels_from(
+    commands: &mut Commands,
+    parent: Entity,
+    mounts: &[Vec2],
+    color: Color,
+    size: Vec2,
+) {
+    for (i, mount) in mounts.iter().enumerate() {
         commands.spawn((
             ChildOf(parent),
             TurretBarrel(i),
-            Sprite {
-                color: Color::srgba(0.4, 0.6, 0.5, 0.85),
-                custom_size: Some(Vec2::new(8.0, 1.2)),
-                ..default()
-            },
+            Sprite { color, custom_size: Some(size), ..default() },
             Anchor::CENTER_LEFT,
             Transform::from_xyz(mount.x, mount.y, 0.1),
         ));
     }
 }
 
+fn spawn_defense_turret_barrels(commands: &mut Commands, parent: Entity) {
+    spawn_turret_barrels_from(
+        commands, parent,
+        &DEFENSE_TURRET_MOUNTS,
+        Color::srgba(0.4, 0.6, 0.5, 0.85),
+        Vec2::new(8.0, 1.2),
+    );
+}
+
 fn spawn_turret_barrels(commands: &mut Commands, parent: Entity) {
-    for (i, mount) in TURRET_MOUNTS.iter().enumerate() {
-        commands.spawn((
-            ChildOf(parent),
-            TurretBarrel(i),
-            Sprite {
-                color: Color::srgba(0.5, 0.5, 0.55, 0.85),
-                custom_size: Some(Vec2::new(10.0, 1.5)),
-                ..default()
-            },
-            Anchor::CENTER_LEFT,
-            Transform::from_xyz(mount.x, mount.y, 0.1),
-        ));
-    }
+    spawn_turret_barrels_from(
+        commands, parent,
+        &TURRET_MOUNTS,
+        Color::srgba(0.5, 0.5, 0.55, 0.85),
+        Vec2::new(10.0, 1.5),
+    );
 }
 
 /// Marker for the locally controlled ship.
@@ -298,16 +302,6 @@ enum AutopilotAlgorithm {
     SniperPath,
 }
 
-/// Parse ship class from `BTL_AP_CLASS` env var (defaults to TorpedoBoat).
-fn ap_class_from_env() -> ShipClass {
-    match std::env::var("BTL_AP_CLASS").as_deref().unwrap_or("") {
-        "Sniper" | "sniper" => ShipClass::Sniper,
-        "Interceptor" | "interceptor" => ShipClass::Interceptor,
-        "Gunship" | "gunship" => ShipClass::Gunship,
-        "DroneCommander" | "dronecommander" | "drone_commander" => ShipClass::DroneCommander,
-        _ => ShipClass::TorpedoBoat,
-    }
-}
 
 /// Per-tick inputs assembled by `route_follow` before dispatching to the algorithm.
 struct AutopilotInput<'a> {
@@ -656,7 +650,7 @@ impl Plugin for ClientPlugin {
         app.init_resource::<CameraShake>();
         app.init_resource::<RoutePlanner>();
         // Pre-select class from BTL_AP_CLASS env var so it spawns immediately on connect (tuning mode).
-        let ap_class = ap_class_from_env();
+        let ap_class = ship_class_from_env();
         app.insert_resource(ClassPicker {
             pending_request: ap_class.to_request(),
             selected: ap_class,
@@ -699,6 +693,7 @@ impl Plugin for ClientPlugin {
             (
                 render_laser_beams,
                 render_railgun,
+                render_torpedo_lock_on,
                 render_aim_helpers,
                 update_cloak_visuals,
                 update_damage_flash_visuals,
@@ -836,6 +831,45 @@ fn log_connected(trigger: On<Add, Connected>, query: Query<(), With<Client>>) {
     }
 }
 
+/// Insert mesh, transform, barrels, and team-label for a ship entity.
+/// Returns the ship's physics radius (needed by the caller for physics setup).
+fn init_ship_base_visuals(
+    commands: &mut Commands,
+    entity: Entity,
+    team: &Team,
+    class: &ShipClass,
+    pos: &Position,
+    rot: &Rotation,
+    is_local: bool,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<ColorMaterial>,
+) -> f32 {
+    let radius = ship_radius(class);
+    let ship_mesh = match class {
+        ShipClass::Interceptor => meshes.add(create_interceptor_mesh(radius)),
+        ShipClass::Gunship => meshes.add(create_gunship_mesh(radius)),
+        ShipClass::TorpedoBoat => meshes.add(create_torpedo_boat_mesh(radius)),
+        ShipClass::Sniper => meshes.add(create_sniper_mesh(radius)),
+        ShipClass::DroneCommander => meshes.add(create_drone_commander_mesh(radius)),
+    };
+    commands.entity(entity).insert((
+        Mesh2d(ship_mesh),
+        MeshMaterial2d(materials.add(team_color(team))),
+        Transform::from_xyz(pos.0.x, pos.0.y, 0.0)
+            .with_rotation(Quat::from_rotation_z(rot.as_radians())),
+        ShipInitialized,
+    ));
+    let barrel_pivot_y = if *class == ShipClass::Interceptor { SHIP_RADIUS * 0.4 } else { 0.0 };
+    spawn_gun_barrel(commands, entity, barrel_pivot_y);
+    if *class == ShipClass::Gunship {
+        spawn_turret_barrels(commands, entity);
+    } else if *class == ShipClass::DroneCommander {
+        spawn_defense_turret_barrels(commands, entity);
+    }
+    spawn_team_label(commands, entity, team, is_local);
+    radius
+}
+
 /// Initialize rendering for predicted ships once their components are synced.
 fn init_predicted_ships(
     mut commands: Commands,
@@ -855,45 +889,17 @@ fn init_predicted_ships(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for (entity, player_id, team, class, pos, rot, is_controlled) in query.iter() {
-        let (radius, mass) = match class {
-            ShipClass::Interceptor => (SHIP_RADIUS, SHIP_MASS),
-            ShipClass::Gunship => (GUNSHIP_RADIUS, GUNSHIP_MASS),
-            ShipClass::TorpedoBoat => (TBOAT_RADIUS, TBOAT_MASS),
-            ShipClass::Sniper => (SNIPER_RADIUS, SNIPER_MASS),
-            ShipClass::DroneCommander => (DCOMMANDER_RADIUS, DCOMMANDER_MASS),
-        };
-        let ship_mesh = match class {
-            ShipClass::Interceptor => meshes.add(create_interceptor_mesh(radius)),
-            ShipClass::Gunship => meshes.add(create_gunship_mesh(radius)),
-            ShipClass::TorpedoBoat => meshes.add(create_torpedo_boat_mesh(radius)),
-            ShipClass::Sniper => meshes.add(create_sniper_mesh(radius)),
-            ShipClass::DroneCommander => meshes.add(create_drone_commander_mesh(radius)),
-        };
+        let radius = init_ship_base_visuals(
+            &mut commands, entity, team, class, pos, rot, is_controlled,
+            &mut meshes, &mut materials,
+        );
         commands.entity(entity).insert((
-            Mesh2d(ship_mesh),
-            MeshMaterial2d(materials.add(team_color(team))),
-            Transform::from_xyz(pos.0.x, pos.0.y, 0.0)
-                .with_rotation(Quat::from_rotation_z(rot.as_radians())),
-            ShipInitialized,
-            FrameInterpolate::<Position> {
-                trigger_change_detection: true,
-                ..default()
-            },
-            FrameInterpolate::<Rotation> {
-                trigger_change_detection: true,
-                ..default()
-            },
+            FrameInterpolate::<Position> { trigger_change_detection: true, ..default() },
+            FrameInterpolate::<Rotation> { trigger_change_detection: true, ..default() },
         ));
-        let barrel_pivot_y = if *class == ShipClass::Interceptor { SHIP_RADIUS * 0.4 } else { 0.0 };
-        spawn_gun_barrel(&mut commands, entity, barrel_pivot_y);
-        if *class == ShipClass::Gunship {
-            spawn_turret_barrels(&mut commands, entity);
-        } else if *class == ShipClass::DroneCommander {
-            spawn_defense_turret_barrels(&mut commands, entity);
-        }
-        spawn_team_label(&mut commands, entity, team, is_controlled);
 
         if is_controlled {
+            let mass = ship_mass(class);
             let angular_inertia = 0.5 * mass * radius * radius;
             commands.entity(entity).insert((
                 RigidBody::Dynamic,
@@ -932,35 +938,10 @@ fn init_interpolated_ships(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for (entity, player_id, team, class, pos, rot) in query.iter() {
-        let radius = match class {
-            ShipClass::Interceptor => SHIP_RADIUS,
-            ShipClass::Gunship => GUNSHIP_RADIUS,
-            ShipClass::TorpedoBoat => TBOAT_RADIUS,
-            ShipClass::Sniper => SNIPER_RADIUS,
-            ShipClass::DroneCommander => DCOMMANDER_RADIUS,
-        };
-        let ship_mesh = match class {
-            ShipClass::Interceptor => meshes.add(create_interceptor_mesh(radius)),
-            ShipClass::Gunship => meshes.add(create_gunship_mesh(radius)),
-            ShipClass::TorpedoBoat => meshes.add(create_torpedo_boat_mesh(radius)),
-            ShipClass::Sniper => meshes.add(create_sniper_mesh(radius)),
-            ShipClass::DroneCommander => meshes.add(create_drone_commander_mesh(radius)),
-        };
-        commands.entity(entity).insert((
-            Mesh2d(ship_mesh),
-            MeshMaterial2d(materials.add(team_color(team))),
-            Transform::from_xyz(pos.0.x, pos.0.y, 0.0)
-                .with_rotation(Quat::from_rotation_z(rot.as_radians())),
-            ShipInitialized,
-        ));
-        let barrel_pivot_y = if *class == ShipClass::Interceptor { SHIP_RADIUS * 0.4 } else { 0.0 };
-        spawn_gun_barrel(&mut commands, entity, barrel_pivot_y);
-        if *class == ShipClass::Gunship {
-            spawn_turret_barrels(&mut commands, entity);
-        } else if *class == ShipClass::DroneCommander {
-            spawn_defense_turret_barrels(&mut commands, entity);
-        }
-        spawn_team_label(&mut commands, entity, team, false);
+        init_ship_base_visuals(
+            &mut commands, entity, team, class, pos, rot, false,
+            &mut meshes, &mut materials,
+        );
 
         info!(
             "Spawned interpolated {class:?} for {:?} on {:?} team",
@@ -1322,6 +1303,29 @@ fn update_drone_visuals(
     }
 }
 
+/// Find the nearest enemy ship within `range`, returning `(position, distance)`.
+fn nearest_enemy_ship(
+    drone_pos: Vec2,
+    own_team: Team,
+    range: f32,
+    enemies: &Query<(&Transform, &Team), With<ShipInitialized>>,
+) -> Option<(Vec2, f32)> {
+    let mut best_dist_sq = range * range;
+    let mut best_pos = None;
+    for (enemy_tf, enemy_team) in enemies.iter() {
+        if *enemy_team == own_team {
+            continue;
+        }
+        let enemy_pos = enemy_tf.translation.truncate();
+        let dist_sq = (enemy_pos - drone_pos).length_squared();
+        if dist_sq < best_dist_sq {
+            best_dist_sq = dist_sq;
+            best_pos = Some(enemy_pos);
+        }
+    }
+    best_pos.map(|pos| (pos, best_dist_sq.sqrt()))
+}
+
 /// Render thin laser beams from laser drones to their nearest enemy target.
 fn render_drone_lasers(
     drones: Query<(Entity, &Drone, &Transform), With<DroneInitialized>>,
@@ -1338,23 +1342,8 @@ fn render_drone_lasers(
             continue;
         }
         let drone_pos = drone_tf.translation.truncate();
-        let range_sq = DRONE_LASER_RANGE * DRONE_LASER_RANGE;
 
-        let mut best_dist_sq = range_sq;
-        let mut best_pos = None;
-        for (enemy_tf, enemy_team) in enemies.iter() {
-            if *enemy_team == drone.owner_team {
-                continue;
-            }
-            let dist_sq = (drone_pos - enemy_tf.translation.truncate()).length_squared();
-            if dist_sq < best_dist_sq {
-                best_dist_sq = dist_sq;
-                best_pos = Some(enemy_tf.translation.truncate());
-            }
-        }
-
-        if let Some(target_pos) = best_pos {
-            let dist = (target_pos - drone_pos).length();
+        if let Some((target_pos, dist)) = nearest_enemy_ship(drone_pos, drone.owner_team, DRONE_LASER_RANGE, &enemies) {
             let fade = 1.0 - 0.7 * (dist / DRONE_LASER_RANGE);
             let base = match drone.owner_team {
                 Team::Red => LinearRgba::new(1.5, 0.3, 0.2, 0.5),
@@ -1422,30 +1411,12 @@ fn render_zone_drone_lasers(
     enemies: Query<(&Transform, &Team), With<ShipInitialized>>,
     mut gizmos: Gizmos,
 ) {
-    let range_sq = FACTORY_DRONE_LASER_RANGE * FACTORY_DRONE_LASER_RANGE;
-
     for (drone, drone_tf) in drones.iter() {
         if !matches!(drone.kind, DroneKind::Laser) {
             continue;
         }
-
         let drone_pos = drone_tf.translation.truncate();
-        let mut best_dist_sq = range_sq;
-        let mut best_pos = None;
-
-        for (enemy_tf, enemy_team) in enemies.iter() {
-            if *enemy_team == drone.team {
-                continue;
-            }
-            let enemy_pos = enemy_tf.translation.truncate();
-            let dist_sq = (enemy_pos - drone_pos).length_squared();
-            if dist_sq < best_dist_sq {
-                best_dist_sq = dist_sq;
-                best_pos = Some(enemy_pos);
-            }
-        }
-
-        if let Some(target_pos) = best_pos {
+        if let Some((target_pos, _)) = nearest_enemy_ship(drone_pos, drone.team, FACTORY_DRONE_LASER_RANGE, &enemies) {
             let beam_color = match drone.team {
                 Team::Red => Color::srgba(1.0, 0.3, 0.2, 0.6),
                 Team::Blue => Color::srgba(0.2, 0.3, 1.0, 0.6),
@@ -1650,7 +1621,7 @@ fn render_railgun(ships: Query<(&ShipClass, &Transform, &RailgunCharge)>, mut gi
         // Show charge glow (bright circle around ship, scales with charge)
         if charge.charge > 0.01 {
             let intensity = charge.charge;
-            let glow_radius = SNIPER_RADIUS * (1.2 + 0.8 * intensity);
+            let glow_radius = ship_radius(&ShipClass::Sniper) * (1.2 + 0.8 * intensity);
             gizmos.circle_2d(
                 ship_pos,
                 glow_radius,
@@ -1661,6 +1632,82 @@ fn render_railgun(ships: Query<(&ShipClass, &Transform, &RailgunCharge)>, mut gi
                     0.15 + 0.3 * intensity,
                 )),
             );
+        }
+    }
+}
+
+/// Draw a flashing red diamond above each allied ship that is the nearest target of an enemy torpedo.
+fn render_torpedo_lock_on(
+    torpedoes: Query<(&Position, &Torpedo)>,
+    ships: Query<(Entity, &Transform, &Team), With<PlayerId>>,
+    local_ship: Query<&Team, With<LocalShip>>,
+    time: Res<Time>,
+    mut gizmos: Gizmos,
+) {
+    let Ok(local_team) = local_ship.single() else { return; };
+
+    let ally_positions: Vec<(Entity, Vec2)> = ships
+        .iter()
+        .filter(|(_, _, t)| **t == *local_team)
+        .map(|(e, tf, _)| (e, tf.translation.truncate()))
+        .collect();
+
+    if ally_positions.is_empty() {
+        return;
+    }
+
+    // For each torpedo, mark the nearest ally as targeted.
+    let mut targeted: std::collections::HashSet<Entity> = std::collections::HashSet::new();
+    for (pos, _torpedo) in torpedoes.iter() {
+        let t_pos = pos.0;
+        if let Some((nearest_entity, _)) = ally_positions
+            .iter()
+            .min_by(|(_, a), (_, b)| {
+                let da = (*a - t_pos).length_squared();
+                let db = (*b - t_pos).length_squared();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+        {
+            targeted.insert(*nearest_entity);
+        }
+    }
+
+    if targeted.is_empty() {
+        return;
+    }
+
+    let elapsed = time.elapsed_secs();
+    let alpha = (elapsed * std::f32::consts::TAU * 4.0).sin() * 0.275 + 0.675;
+
+    for (entity, tf, _) in ships.iter() {
+        if !targeted.contains(&entity) {
+            continue;
+        }
+        let center = tf.translation.truncate() + Vec2::new(0.0, 26.0);
+        let color = Color::srgba(1.0, 0.15, 0.15, alpha);
+
+        // Outer diamond (4 line segments)
+        let r_outer = 10.0_f32;
+        let pts_outer = [
+            center + Vec2::new(0.0, r_outer),
+            center + Vec2::new(r_outer, 0.0),
+            center + Vec2::new(0.0, -r_outer),
+            center + Vec2::new(-r_outer, 0.0),
+        ];
+        for i in 0..4 {
+            gizmos.line_2d(pts_outer[i], pts_outer[(i + 1) % 4], color);
+        }
+
+        // Inner diamond
+        let r_inner = 5.5_f32;
+        let pts_inner = [
+            center + Vec2::new(0.0, r_inner),
+            center + Vec2::new(r_inner, 0.0),
+            center + Vec2::new(0.0, -r_inner),
+            center + Vec2::new(-r_inner, 0.0),
+        ];
+        for i in 0..4 {
+            gizmos.line_2d(pts_inner[i], pts_inner[(i + 1) % 4], color);
         }
     }
 }
@@ -2762,13 +2809,13 @@ fn update_class_indicator(
 }
 
 fn update_hud(
-    ship_query: Query<(&Transform, &Health, &Fuel, &Ammo, &LinearVelocity), With<LocalShip>>,
+    ship_query: Query<(&Transform, &Health, &Fuel, &Ammo, &LinearVelocity, &Team), With<LocalShip>>,
     mut text_query: Query<&mut Text, With<HudText>>,
-    mut health_bar: Query<&mut Node, HealthBarFilter>,
+    mut health_bar: Query<(&mut Node, &mut BackgroundColor), HealthBarFilter>,
     mut fuel_bar: Query<&mut Node, FuelBarFilter>,
     mut ammo_bar: Query<&mut Node, AmmoBarFilter>,
 ) {
-    let Ok((ship_tf, health, fuel, ammo, lin_vel)) = ship_query.single() else {
+    let Ok((ship_tf, health, fuel, ammo, lin_vel, team)) = ship_query.single() else {
         return;
     };
 
@@ -2779,8 +2826,12 @@ fn update_hud(
         **text = format!("SPD {speed} | ({x}, {y})");
     }
 
-    if let Ok(mut node) = health_bar.single_mut() {
+    if let Ok((mut node, mut color)) = health_bar.single_mut() {
         node.width = Val::Percent(health.fraction() * 100.0);
+        *color = match team {
+            Team::Red => BackgroundColor(Color::srgb(0.85, 0.2, 0.2)),
+            Team::Blue => BackgroundColor(Color::srgb(0.2, 0.35, 0.9)),
+        };
     }
 
     if let Ok(mut node) = fuel_bar.single_mut() {
@@ -3454,7 +3505,7 @@ fn inject_test_route(
     };
     // Wait for the configured class to spawn — the default Interceptor spawns first during
     // the class-switch round-trip; injecting on it would use the wrong config.
-    let expected_class = ap_class_from_env();
+    let expected_class = ship_class_from_env();
     if class.copied().unwrap_or_default() != expected_class {
         return;
     }

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use btl_protocol::{Cloak, PlayerId, Team};
 use btl_shared::{MAP_RADIUS, OBJECTIVE_ZONE_RADIUS, objective_zone_positions};
 
-use crate::client::LocalShip;
+use crate::client::{LocalShip, team_color};
 
 /// Minimap size in pixels
 const MINIMAP_SIZE: f32 = 200.0;
@@ -227,10 +227,7 @@ fn update_minimap_dots(
 
         let is_local = entity == local_entity;
         let size = if is_local { 5.0 } else { 4.0 };
-        let color = match *team {
-            Team::Red => Color::srgb(1.0, 0.3, 0.3),
-            Team::Blue => Color::srgb(0.3, 0.3, 1.0),
-        };
+        let color = team_color(team);
 
         let x = center + world_pos.x * MINIMAP_SCALE - size / 2.0;
         let y = center - world_pos.y * MINIMAP_SCALE - size / 2.0;

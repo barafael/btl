@@ -29,10 +29,10 @@ use btl_shared::{
     TURRET_RANGE, TURRET_SLEW_RATE, TURRET_SPEED, Torpedo, ZONE_SCORE_RATE,
     CollisionGrids, FIXED_DT, MAX_ASTEROID_RADIUS, MAX_SHIP_RADIUS,
     generate_asteroid_layout, objective_zone_positions, ray_circle_intersect,
-    CAPTURE_RATE, DECAP_RATE, DAMAGE_FLASH_DURATION, DamageFlash, SpawnProtection, ship_radius,
+    CAPTURE_RATE, DECAP_RATE, DAMAGE_FLASH_DURATION, DamageFlash, SpawnProtection,
+    ship_radius, ship_max_health, ship_ammo_regen, ship_class_from_env,
     COLLISION_DAMAGE_VELOCITY_THRESHOLD, COLLISION_DAMAGE_PER_VELOCITY, COLLISION_FASTER_SHIP_MULT,
-    ZONE_HP_REGEN, ZONE_REGEN_MULT, AMMO_REGEN_RATE, FUEL_REGEN_RATE,
-    GUNSHIP_AMMO_REGEN, TBOAT_AMMO_REGEN, SNIPER_AMMO_REGEN, DCOMMANDER_AMMO_REGEN,
+    ZONE_HP_REGEN, ZONE_REGEN_MULT, FUEL_REGEN_RATE,
     OBJECTIVE_KINDS, ObjectiveKind, ZoneDrone, ZoneRailgun, ZoneShield,
     FACTORY_LASER_DRONES, FACTORY_KAMIKAZE_DRONES, FACTORY_DRONE_HEALTH,
     FACTORY_DRONE_SPEED, FACTORY_DRONE_ORBIT_RADIUS, FACTORY_DRONE_AGGRO_RANGE,
@@ -204,6 +204,29 @@ fn handle_new_client_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     ));
 }
 
+/// Spawn a replicated, predicted, interpolated player ship and return its entity.
+fn spawn_player_ship(
+    commands: &mut Commands,
+    peer_id: PeerId,
+    team: Team,
+    class: ShipClass,
+    pos: Vec2,
+    link_entity: Entity,
+) -> Entity {
+    commands
+        .spawn((
+            ShipBundle::new(peer_id, team, class, pos),
+            Replicate::to_clients(NetworkTarget::All),
+            PredictionTarget::to_clients(NetworkTarget::Single(peer_id)),
+            InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer_id)),
+            ControlledBy {
+                owner: link_entity,
+                lifetime: Default::default(),
+            },
+        ))
+        .id()
+}
+
 /// When a client is confirmed connected, spawn their ship.
 fn handle_client_connected(
     trigger: On<Add, Connected>,
@@ -244,30 +267,9 @@ fn handle_client_connected(
     );
 
     // BTL_AP_CLASS env var overrides class for autopilot tuning (default: TorpedoBoat).
-    let class = match std::env::var("BTL_AP_CLASS").as_deref().unwrap_or("") {
-        "Sniper" | "sniper" => ShipClass::Sniper,
-        "Interceptor" | "interceptor" => ShipClass::Interceptor,
-        "Gunship" | "gunship" => ShipClass::Gunship,
-        "DroneCommander" | "dronecommander" | "drone_commander" => ShipClass::DroneCommander,
-        _ => ShipClass::TorpedoBoat,
-    };
+    let class = ship_class_from_env();
 
-    let ship = commands
-        .spawn((
-            ShipBundle::new(peer_id, team, class, spawn_pos),
-            // Replicate to all clients
-            Replicate::to_clients(NetworkTarget::All),
-            // Owning client gets prediction
-            PredictionTarget::to_clients(NetworkTarget::Single(peer_id)),
-            // Everyone else gets interpolation
-            InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer_id)),
-            // Mark ownership
-            ControlledBy {
-                owner: trigger.entity,
-                lifetime: Default::default(),
-            },
-        ))
-        .id();
+    let ship = spawn_player_ship(&mut commands, peer_id, team, class, spawn_pos, trigger.entity);
 
     info!("Spawned {class:?} ship {ship:?} for {peer_id:?} at {spawn_pos}");
 }
@@ -544,18 +546,14 @@ fn process_respawns(
             let spawn_pos =
                 pick_spawn_position(entry.team, &zone_states, entry.peer_id.to_bits());
 
-            let ship = commands
-                .spawn((
-                    ShipBundle::new(entry.peer_id, entry.team, entry.class, spawn_pos),
-                    Replicate::to_clients(NetworkTarget::All),
-                    PredictionTarget::to_clients(NetworkTarget::Single(entry.peer_id)),
-                    InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(entry.peer_id)),
-                    ControlledBy {
-                        owner: entry.link_entity,
-                        lifetime: Default::default(),
-                    },
-                ))
-                .id();
+            let ship = spawn_player_ship(
+                &mut commands,
+                entry.peer_id,
+                entry.team,
+                entry.class,
+                spawn_pos,
+                entry.link_entity,
+            );
 
             info!("Respawned ship {ship:?} for {:?}", entry.peer_id);
             false // remove from queue
@@ -599,16 +597,7 @@ fn handle_class_switch(
 
         commands.entity(entity).despawn();
 
-        commands.spawn((
-            ShipBundle::new(peer_id, team, requested, spawn_pos),
-            Replicate::to_clients(NetworkTarget::All),
-            PredictionTarget::to_clients(NetworkTarget::Single(peer_id)),
-            InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer_id)),
-            ControlledBy {
-                owner: link_entity,
-                lifetime: Default::default(),
-            },
-        ));
+        spawn_player_ship(&mut commands, peer_id, team, requested, spawn_pos, link_entity);
     }
 }
 
@@ -1419,41 +1408,21 @@ fn round_management(
                 // Reset defense timers
                 *timers = ZoneDefenseTimers::default();
 
-                // Despawn all zone defense entities
-                for entity in zone_drones.iter() {
-                    commands.entity(entity).try_despawn();
-                }
-                for entity in zone_railguns.iter() {
-                    commands.entity(entity).try_despawn();
-                }
-                for entity in zone_shields.iter() {
-                    commands.entity(entity).try_despawn();
-                }
-
-                // Despawn projectiles, mines, torpedoes, player drones
-                for entity in projectiles.iter() {
-                    commands.entity(entity).try_despawn();
-                }
-                for entity in mines.iter() {
-                    commands.entity(entity).try_despawn();
-                }
-                for entity in torpedoes.iter() {
-                    commands.entity(entity).try_despawn();
-                }
-                for entity in player_drones.iter() {
+                // Despawn all transient entities
+                for entity in zone_drones.iter()
+                    .chain(zone_railguns.iter())
+                    .chain(zone_shields.iter())
+                    .chain(projectiles.iter())
+                    .chain(mines.iter())
+                    .chain(torpedoes.iter())
+                    .chain(player_drones.iter())
+                {
                     commands.entity(entity).try_despawn();
                 }
 
                 // Reset all ships: full health, fuel, ammo + spawn protection
                 for (class, mut health, mut fuel, mut ammo, mut sp) in ships.iter_mut() {
-                    let max_hp = match class {
-                        ShipClass::Interceptor => btl_shared::SHIP_MAX_HEALTH,
-                        ShipClass::Gunship => btl_shared::GUNSHIP_MAX_HEALTH,
-                        ShipClass::TorpedoBoat => btl_shared::TBOAT_MAX_HEALTH,
-                        ShipClass::Sniper => btl_shared::SNIPER_MAX_HEALTH,
-                        ShipClass::DroneCommander => btl_shared::DCOMMANDER_MAX_HEALTH,
-                    };
-                    health.current = max_hp;
+                    health.current = ship_max_health(class);
                     fuel.current = fuel.max;
                     ammo.current = ammo.max;
                     sp.remaining = btl_shared::SPAWN_PROTECTION_DURATION;
@@ -1511,14 +1480,7 @@ fn zone_benefits(
         }
 
         // Bonus ammo regen (ZONE_REGEN_MULT - 1.0 to add on top of passive)
-        let ammo_rate = match class {
-            ShipClass::Interceptor => AMMO_REGEN_RATE,
-            ShipClass::Gunship => GUNSHIP_AMMO_REGEN,
-            ShipClass::TorpedoBoat => TBOAT_AMMO_REGEN,
-            ShipClass::Sniper => SNIPER_AMMO_REGEN,
-            ShipClass::DroneCommander => DCOMMANDER_AMMO_REGEN,
-        };
-        let bonus_ammo = ammo_rate * (ZONE_REGEN_MULT - 1.0);
+        let bonus_ammo = ship_ammo_regen(class) * (ZONE_REGEN_MULT - 1.0);
         if ammo.current < ammo.max {
             ammo.current = (ammo.current + bonus_ammo * dt).min(ammo.max);
         }

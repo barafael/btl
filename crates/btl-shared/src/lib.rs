@@ -973,15 +973,8 @@ fn update_fuel(mut query: Query<(&ActionState<ShipInput>, &ShipClass, &mut Fuel)
 fn update_ammo(mut query: Query<(&ShipClass, &mut Ammo)>) {
     let dt = FIXED_DT;
     for (class, mut ammo) in query.iter_mut() {
-        let regen = match class {
-            ShipClass::Interceptor => AMMO_REGEN_RATE,
-            ShipClass::Gunship => GUNSHIP_AMMO_REGEN,
-            ShipClass::TorpedoBoat => TBOAT_AMMO_REGEN,
-            ShipClass::Sniper => SNIPER_AMMO_REGEN,
-            ShipClass::DroneCommander => DCOMMANDER_AMMO_REGEN,
-        };
         if ammo.current < ammo.max {
-            ammo.current = (ammo.current + regen * dt).min(ammo.max);
+            ammo.current = (ammo.current + ship_ammo_regen(class) * dt).min(ammo.max);
         }
     }
 }
@@ -1117,6 +1110,50 @@ pub fn ship_radius(class: &ShipClass) -> f32 {
         ShipClass::TorpedoBoat => TBOAT_RADIUS,
         ShipClass::Sniper => SNIPER_RADIUS,
         ShipClass::DroneCommander => DCOMMANDER_RADIUS,
+    }
+}
+
+/// Helper: get ship physics mass from class.
+pub fn ship_mass(class: &ShipClass) -> f32 {
+    match class {
+        ShipClass::Interceptor => SHIP_MASS,
+        ShipClass::Gunship => GUNSHIP_MASS,
+        ShipClass::TorpedoBoat => TBOAT_MASS,
+        ShipClass::Sniper => SNIPER_MASS,
+        ShipClass::DroneCommander => DCOMMANDER_MASS,
+    }
+}
+
+/// Helper: get ship max health from class.
+pub fn ship_max_health(class: &ShipClass) -> f32 {
+    match class {
+        ShipClass::Interceptor => SHIP_MAX_HEALTH,
+        ShipClass::Gunship => GUNSHIP_MAX_HEALTH,
+        ShipClass::TorpedoBoat => TBOAT_MAX_HEALTH,
+        ShipClass::Sniper => SNIPER_MAX_HEALTH,
+        ShipClass::DroneCommander => DCOMMANDER_MAX_HEALTH,
+    }
+}
+
+/// Helper: get passive ammo regen rate from class.
+pub fn ship_ammo_regen(class: &ShipClass) -> f32 {
+    match class {
+        ShipClass::Interceptor => AMMO_REGEN_RATE,
+        ShipClass::Gunship => GUNSHIP_AMMO_REGEN,
+        ShipClass::TorpedoBoat => TBOAT_AMMO_REGEN,
+        ShipClass::Sniper => SNIPER_AMMO_REGEN,
+        ShipClass::DroneCommander => DCOMMANDER_AMMO_REGEN,
+    }
+}
+
+/// Parse ship class from the `BTL_AP_CLASS` env var (defaults to TorpedoBoat).
+pub fn ship_class_from_env() -> ShipClass {
+    match std::env::var("BTL_AP_CLASS").as_deref().unwrap_or("") {
+        "Sniper" | "sniper" => ShipClass::Sniper,
+        "Interceptor" | "interceptor" => ShipClass::Interceptor,
+        "Gunship" | "gunship" => ShipClass::Gunship,
+        "DroneCommander" | "dronecommander" | "drone_commander" => ShipClass::DroneCommander,
+        _ => ShipClass::TorpedoBoat,
     }
 }
 

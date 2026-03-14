@@ -27,6 +27,7 @@ impl Plugin for EffectsPlugin {
                 update_railgun_beams,
                 detect_shield_impacts,
                 update_shield_ripples,
+                spawn_heavy_cannon_trails,
             ),
         );
     }
@@ -617,5 +618,54 @@ fn update_shield_ripples(
         if a2 > 0.01 {
             gizmos.circle_2d(ripple.center, r2, Color::LinearRgba(LinearRgba::new(c.red, c.green, c.blue, a2)));
         }
+    }
+}
+
+/// Spawn a small orange smoke puff behind each HeavyCannon projectile each frame.
+/// The `EffectParticle` infrastructure handles movement and alpha fade automatically.
+fn spawn_heavy_cannon_trails(
+    mut commands: Commands,
+    projectiles: Query<(&Position, &LinearVelocity, &ProjectileKind)>,
+    mut rng: ResMut<EffectRng>,
+    mut timer: Local<f32>,
+    time: Res<Time>,
+) {
+    // Rate-limit: one puff per projectile every ~0.035 s (~28 Hz).
+    *timer += time.delta_secs();
+    if *timer < 0.035 {
+        return;
+    }
+    *timer = 0.0;
+
+    for (pos, vel, kind) in projectiles.iter() {
+        if *kind != ProjectileKind::HeavyCannon {
+            continue;
+        }
+        let dir = vel.0.normalize_or_zero();
+        let perp = Vec2::new(-dir.y, dir.x);
+
+        // Spawn slightly behind + random lateral spread.
+        let offset = -dir * 5.0 + perp * (rng.next_f32() * 5.0 - 2.5);
+        let spawn_pos = pos.0 + offset;
+
+        // Puff drifts slowly backward and fans out.
+        let smoke_vel = -dir * 25.0 + perp * (rng.next_f32() * 40.0 - 20.0);
+        let size = 5.0 + rng.next_f32() * 3.5;
+
+        commands.spawn((
+            EffectParticle {
+                velocity: smoke_vel,
+                lifetime: 0.30,
+                max_lifetime: 0.30,
+                start_size: size,
+                end_size: 1.0,
+            },
+            Sprite {
+                color: Color::LinearRgba(LinearRgba::new(2.2, 0.75, 0.12, 1.0)),
+                custom_size: Some(Vec2::splat(size)),
+                ..default()
+            },
+            Transform::from_xyz(spawn_pos.x, spawn_pos.y, 4.5),
+        ));
     }
 }
