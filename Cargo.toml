@@ -4,6 +4,7 @@ members = [
     "crates/btl-shared",
     "crates/btl-server",
     "crates/btl-client",
+    "crates/btl-sfx-gen",
 ]
 resolver = "3"
 

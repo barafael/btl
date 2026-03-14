@@ -1,11 +1,14 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
+mod audio;
 mod client;
 mod effects;
 mod minimap;
 mod nebula;
 mod particles;
 mod starfield;
+
+use audio::AudioPlugin;
 
 use std::net::SocketAddr;
 
@@ -123,6 +126,7 @@ fn main() {
         .add_plugins(effects::EffectsPlugin)
         .add_plugins(minimap::MinimapPlugin)
         .add_plugins(nebula::NebulaPlugin)
+        .add_plugins(AudioPlugin)
         .add_systems(
             Startup,
             (
