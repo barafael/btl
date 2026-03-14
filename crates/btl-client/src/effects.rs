@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
+use avian2d::prelude::LinearVelocity;
 use bevy::prelude::*;
 
-use btl_protocol::{Drone, Mine, PlayerId, Projectile, Team};
+use btl_protocol::{Drone, Mine, PlayerId, Projectile, ProjectileKind, Team};
 use btl_shared::Position;
 
 pub struct EffectsPlugin;
@@ -19,8 +20,10 @@ impl Plugin for EffectsPlugin {
                 update_entity_cache,
                 spawn_muzzle_flashes,
                 spawn_mine_drop_flashes,
+                spawn_railgun_beams,
                 update_effect_particles,
                 update_flash_effects,
+                update_railgun_beams,
             ),
         );
     }
@@ -50,6 +53,12 @@ struct EffectParticle {
 #[derive(Component)]
 struct FlashEffect {
     lifetime: f32,
+}
+
+/// Fading beam line spawned when a railgun fires.
+#[derive(Component)]
+struct RailgunBeam {
+    timer: f32,
 }
 
 /// Runs BEFORE cache update — uses last frame's cache to detect despawns.
@@ -403,6 +412,55 @@ fn spawn_ship_explosion(commands: &mut Commands, pos: Vec2, team: &Team, rng: &m
             },
             Transform::from_xyz(pos.x, pos.y, 6.8),
         ));
+    }
+}
+
+/// Spawn a fading beam line when a railgun projectile appears.
+fn spawn_railgun_beams(
+    mut commands: Commands,
+    new_projectiles: Query<
+        (&ProjectileKind, &Projectile, &Position, &LinearVelocity),
+        Added<ProjectileKind>,
+    >,
+) {
+    for (kind, proj, pos, vel) in new_projectiles.iter() {
+        if *kind != ProjectileKind::Railgun {
+            continue;
+        }
+        let dir = vel.0.normalize_or_zero();
+        let angle = dir.y.atan2(dir.x);
+        let beam_color = match proj.owner_team {
+            Team::Red => LinearRgba::new(6.0, 2.0, 0.5, 1.0),
+            Team::Blue => LinearRgba::new(0.5, 2.5, 7.0, 1.0),
+        };
+        commands.spawn((
+            RailgunBeam { timer: 0.15 },
+            Sprite {
+                color: Color::LinearRgba(beam_color),
+                custom_size: Some(Vec2::new(14000.0, 4.0)),
+                ..default()
+            },
+            Transform::from_xyz(pos.0.x, pos.0.y, 7.0)
+                .with_rotation(Quat::from_rotation_z(angle)),
+        ));
+    }
+}
+
+/// Fade and despawn railgun beam effects.
+fn update_railgun_beams(
+    mut commands: Commands,
+    mut beams: Query<(Entity, &mut RailgunBeam, &mut Sprite)>,
+    time: Res<Time>,
+) {
+    const BEAM_LIFETIME: f32 = 0.15;
+    let dt = time.delta_secs();
+    for (entity, mut beam, mut sprite) in beams.iter_mut() {
+        beam.timer -= dt;
+        if beam.timer <= 0.0 {
+            commands.entity(entity).despawn();
+        } else if let Color::LinearRgba(ref mut c) = sprite.color {
+            c.alpha = (beam.timer / BEAM_LIFETIME).powi(2);
+        }
     }
 }
 

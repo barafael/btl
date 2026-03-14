@@ -179,6 +179,13 @@ struct CameraZoom {
     scale: f32,
 }
 
+/// Transient camera shake state (decays each frame).
+#[derive(Resource, Default)]
+struct CameraShake {
+    intensity: f32,
+    remaining: f32,
+}
+
 impl Default for CameraZoom {
     fn default() -> Self {
         Self { scale: ZOOM_DEFAULT }
@@ -592,6 +599,7 @@ impl Plugin for ClientPlugin {
         });
 
         app.init_resource::<CameraZoom>();
+        app.init_resource::<CameraShake>();
         app.init_resource::<RoutePlanner>();
         // Pre-select class from BTL_AP_CLASS env var so it spawns immediately on connect (tuning mode).
         let ap_class = ap_class_from_env();
@@ -668,7 +676,7 @@ impl Plugin for ClientPlugin {
             Startup,
             (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_kill_feed, spawn_class_picker, hide_window_cursor),
         );
-        app.add_systems(Update, (update_victory_overlay, update_kill_feed, render_custom_cursor));
+        app.add_systems(Update, (update_victory_overlay, update_kill_feed, shake_on_damage, render_custom_cursor));
     }
 }
 
@@ -2714,6 +2722,8 @@ fn update_turret_barrels(
 fn camera_follow_local_ship(
     ship_query: Query<&Transform, With<LocalShip>>,
     mut camera_query: Query<&mut Transform, (With<Camera2d>, Without<LocalShip>)>,
+    mut shake: ResMut<CameraShake>,
+    time: Res<Time>,
 ) {
     let Ok(ship_transform) = ship_query.single() else {
         return;
@@ -2723,6 +2733,29 @@ fn camera_follow_local_ship(
     };
     cam_transform.translation.x = ship_transform.translation.x;
     cam_transform.translation.y = ship_transform.translation.y;
+
+    if shake.remaining > 0.0 {
+        let dt = time.delta_secs();
+        shake.remaining = (shake.remaining - dt).max(0.0);
+        let t = shake.remaining / 0.2; // 1.0→0.0 as shake decays
+        let mag = shake.intensity * t;
+        let phase = time.elapsed_secs() * 65.0;
+        cam_transform.translation.x += phase.sin() * mag;
+        cam_transform.translation.y += (phase * 1.618).cos() * mag;
+    }
+}
+
+/// Trigger camera shake when the local ship takes a hit.
+fn shake_on_damage(
+    local_ship: Query<Ref<DamageFlash>, With<LocalShip>>,
+    mut shake: ResMut<CameraShake>,
+) {
+    for flash in local_ship.iter() {
+        if flash.is_changed() && flash.timer > 0.05 {
+            shake.intensity = 10.0;
+            shake.remaining = 0.2;
+        }
+    }
 }
 
 // --- Camera zoom systems ---

@@ -205,9 +205,9 @@ Missing visual effects for high-impact moments:
 
 - [x] Damage flash: white overlay on ship when hit (DamageFlash component, fully implemented)
 - [x] Collision damage: velocity-threshold system, faster ship takes multiplied damage
-- [ ] Railgun beam: instantaneous thick bright line (zone railgun + Sniper) with ~0.15s fade
+- [x] Railgun beam: bright 14000px line in fire direction, fades quadratically over 0.15s (team-colored)
 - [ ] Shield impact ripple: expanding ring at projectile contact point on Powerplant shield
-- [ ] Screen shake: short burst on collision/explosion, intensity scales with force
+- [x] Screen shake: 0.2s decaying sinusoidal shake triggered by DamageFlash on local ship
 - [ ] Heavy cannon smoke trail: ~0.3s fading orange trail behind Gunship projectile
 - [ ] Torpedo lock-on indicator: flashing red diamond above the targeted ship
 
