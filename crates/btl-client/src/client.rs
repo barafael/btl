@@ -79,7 +79,7 @@ fn spawn_team_label(commands: &mut Commands, ship_entity: Entity, team: &Team, i
 /// Keep ship label positions in sync with their ships; despawn orphaned labels.
 fn update_ship_labels(
     mut commands: Commands,
-    mut labels: Query<(Entity, &ShipLabelFor, &mut Transform, &mut Visibility)>,
+    mut labels: Query<(Entity, &ShipLabelFor, &mut Transform, &mut Visibility), With<ShipLabel>>,
     ships: Query<&Transform, (With<ShipInitialized>, Without<ShipLabel>)>,
 ) {
     for (label_entity, ship_ref, mut label_tf, mut vis) in labels.iter_mut() {

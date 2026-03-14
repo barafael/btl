@@ -3,10 +3,8 @@
 use avian2d::prelude::LinearVelocity;
 use bevy::audio::{PlaybackMode, Volume};
 use bevy::prelude::*;
-use lightyear::prelude::client::*;
 use lightyear::prelude::input::native::ActionState;
-use lightyear::prelude::*;
-use btl_protocol::{Mine, PlayerId, Projectile, ProjectileKind, RailgunCharge, ShipClass, ShipInput, Team, TeamScores, Torpedo};
+use btl_protocol::{Mine, PlayerId, Projectile, ProjectileKind, RailgunCharge, ShipClass, ShipInput, TeamScores, Torpedo};
 use btl_shared::{Ammo, SHIP_MAX_SPEED};
 use crate::client::LocalShip;
 
