@@ -150,184 +150,161 @@ All 5 classes implemented with unique meshes, stats, and weapon systems:
 
 ---
 
-## Phase 4: Objectives 🔧
+## Phase 4: Objectives ✅
 
-### 4.1 Capture Zones — Partial ✅
+### 4.1 Capture Zones ✅
 
-Zone control is implemented but simplified from the original design:
+- [x] 3 circular zones at 60% MAP_RADIUS (6000px), 300-unit radius
+- [x] Gradual capture progress: progress ∈ [-1.0 Red, 0.0 neutral, +1.0 Blue]
+- [x] Diminishing returns: 1×/1.5×/1.8×/2.0× for 1–4 ships in zone
+- [x] Contested (equal non-zero ships) = frozen; empty = passive decap at 0.02/s (~50s full reset)
+- [x] Visual zone ring color shifts from gray → team color as progress fills
+- [x] King-of-the-hill scoring: 1 pt/s per controlled zone, first to 100 wins
+- [x] Victory overlay with round restart (5s display → 3s countdown → full reset)
 
-- [x] 3 circular zones at 60% MAP_RADIUS, 300-unit radius
-- [x] Zone control: server counts ships per team in each zone each tick
-- [x] Majority-based control (more ships = team controls zone, equal = contested)
-- [x] Replicated TeamScores with per-zone control state
-- [x] King-of-the-hill scoring: 1 point/sec per controlled zone, first to 100 wins
-- [x] Victory state: RoundState::Won(team), client shows victory overlay
-- [x] Gradual capture progress (0.0→1.0) with diminishing returns for multiple ships
-- [x] Visual zone ring color shift (neutral gray → team color) with progress fill
-- [x] Passive decap (unattended zones drift to neutral at DECAP_RATE=0.02/s)
+### 4.2 Objective Defenses ✅
 
-**Design note:** Current implementation uses instant majority-based control + score-to-100, which differs from the design doc's "team with 0 objectives loses" win condition. Both could coexist (score win + elimination win). Decide during playtesting which feels better.
+All three defense types spawn when zone captured, despawn when lost:
 
-### 4.2 Objective Defenses ❌
+1. **Factory (zone 0)** — 11 defense drones (7 laser, 4 kamikaze), 15 HP each
+   - Laser drones: orbit zone, 8 DPS at 250px range, respawn every 10s
+   - Kamikaze drones: 30 damage on contact, swarm to 2× zone radius then charge
+2. **Railgun (zone 1)** — auto-targeting turret at zone center
+   - Idle → Tracking (1.5 rad/s slew, 2s charge) → Locked (0.5s telegraph) → fires (60 dmg, 3000px/s) → 4s cooldown
+3. **Powerplant (zone 2)** — 350px energy shield bubble
+   - Reflects enemy projectiles (bounce off surface normal)
+   - Detonates enemy torpedoes on contact
 
-Defenses activate when objective is captured, deactivate when neutral/enemy-owned.
+### 4.3 Zone Benefits ✅
 
-1. **Factory** — spawns 11 defense drones (4 explosive, 7 laser)
-   - Explosive drones: kamikaze AI, patrol zone, charge enemies on detection, AoE damage on impact
-   - Laser drones: orbit zone, fire at nearest enemy in range, low HP
-   - Drones respawn slowly while Factory is held (1 per 10s until full)
-   - Drones despawn if Factory is lost
-2. **Railgun** — auto-targeting turret entity at zone center
-   - Targets nearest enemy in range (~1500 units)
-   - Telegraph: tracks target for 2s, then stops tracking for 0.5s (telegraph), then fires
-   - High damage, narrow beam, long cooldown (8s)
-   - Skilled players read the tracking-stop and dodge
-3. **Powerplant** — energy shield bubble (~400 unit radius)
-   - Deflects projectiles (bullets bounce off at reflection angle)
-   - Weakens lasers (50% damage reduction through shield)
-   - Detonates torpedoes on contact with shield (AoE at shield surface, not at target)
-   - Allied ships inside are protected; enemies must breach to fight effectively
+All implemented and active when inside a friendly-controlled zone:
 
-### 4.3 Objective Benefits ❌
+- [x] +5 HP/s regen (ships below max HP)
+- [x] 2× ammo and fuel regen (on top of passive rate)
+- [x] Drone Commander: drone respawn timer ticks at double speed
+- [x] Respawn position: server picks edge of a randomly-selected controlled zone
 
-- All captured objectives:
-  - Repair nearby allied ships (slow HP regen when within zone, ~5 HP/s)
-  - Resupply ammo (refill rate 2x passive rate)
-  - Resupply fuel (refill rate 2x passive rate)
-  - Resupply drones (Drone Commander gets 1 drone per 4s instead of 8s)
-- Respawn at random captured objective (if multiple held, random selection)
+### 4.4 Round Management 🔧
 
-### 4.4 Round Management ❌
-
-- [ ] Round restart: reset all entity positions, reset zone control to neutral
-- [ ] Team reshuffle between rounds
-- [ ] Spawn protection (2–3s invulnerability after respawn)
-- [ ] Victory screen with stats (kills, captures, damage dealt), countdown to next round
-- [ ] Match structure: best of N rounds (configurable, default 3)
-- [ ] Last-stand defense bonus (strengthened defenses on team's final objective)
-
-**Phase 4 is complete when:** Full game loop works — capture objectives, benefit from them, round resets on victory.
+- [x] Round restart: despawns all projectiles/mines/torpedoes/drones/zone defense entities, resets HP/fuel/ammo/spawn protection on all ships, resets zone progress to neutral
+- [x] Spawn protection: 3s invulnerability after every spawn/respawn (SpawnProtection component)
+- [ ] Victory stats screen: show kills, damage dealt, zones captured per player at round end
+- [ ] Kill feed: scrolling in-game event log (killed X, Y captured zone)
+- [ ] Team labels: player name / team-color indicator above each ship
+- [ ] Team reshuffle between rounds (rebalance if teams are uneven)
+- [ ] Match structure: best of N rounds with series score (stretch)
+- [ ] Last-stand defense bonus: strengthened zone defenses when a team holds only 1 objective (stretch)
 
 ---
 
-## Phase 5: Game Feel
+## Phase 5: Polish
 
-### 5.1 Fog of War ❌
+### 5.1 Combat Feedback ❌
+
+Missing visual effects for high-impact moments:
+
+- [x] Damage flash: white overlay on ship when hit (DamageFlash component, fully implemented)
+- [x] Collision damage: velocity-threshold system, faster ship takes multiplied damage
+- [ ] Railgun beam: instantaneous thick bright line (zone railgun + Sniper) with ~0.15s fade
+- [ ] Shield impact ripple: expanding ring at projectile contact point on Powerplant shield
+- [ ] Screen shake: short burst on collision/explosion, intensity scales with force
+- [ ] Heavy cannon smoke trail: ~0.3s fading orange trail behind Gunship projectile
+- [ ] Torpedo lock-on indicator: flashing red diamond above the targeted ship
+
+### 5.2 Readability ❌
+
+Small additions that make the game state legible at a glance:
+
+- [ ] Kill feed: scrolling event log (top-left or top-right), shows "Player A killed Player B" with class icons
+- [ ] Team labels: name tag above each ship, team-colored, fades near screen edge
+- [ ] Zone capture arc: filled arc inside zone ring showing progress toward next controller flip (currently only ring color changes)
+- [ ] Team color indicators on HUD bars (health bar tinted to team color)
+
+### 5.3 Fog of War ❌
+
+Adds strategic depth; minimap becomes meaningful information asymmetry:
 
 - Each ship has a sensor range (~800 units)
-- Minimap only shows entities within allied sensor range (union of all allied ships' ranges)
-- Cloaked Sniper: appears as inaccurate shimmer on minimap (position offset by random ±100 units, updates slowly)
-- Objective zones always visible (known fixed locations)
-- Ships outside sensor range: not rendered on minimap, but still rendered in game view if on screen (minimap fog only)
+- Minimap only shows enemies within allied sensor range (union of all allied ships)
+- Cloaked Sniper: appears as imprecise shimmer on minimap (±100px random offset, slow update)
+- Objective zones always visible (fixed known locations)
+- Enemies outside sensor range: hidden from minimap, still visible in main view if on-screen
 
-### 5.2 Visual Effects 🔧
+### 5.4 Audio ❌
 
-- [x] Thruster particles: HDR color gradient, bloom, velocity inheritance, halo/ember variants, directional cones per input
-- [x] Afterburner flare: enhanced thruster particles at higher intensity, fuel sputter when low
-- [x] RCS thruster cones: mesh triangles + glow per nozzle, activation-scaled
-- [x] Muzzle flash: bright HDR sprite (0.04s) on projectile spawn
-- [x] Impact sparks: 5-point yellow burst at projectile hit point
-- [x] Mine placement flash: white HDR flash on deploy
-- [x] Mine detonation: central flash + 16-particle expanding ring + 8 debris particles
-- [x] Mine pulsing glow while active (rotation + bob animation)
-- [x] Ship destruction explosion: large flash + secondary flash + 24 fireball particles + 12 team-colored hull chunks + 16 hot sparks
-- [x] Drone destruction: cyan flash + 10 fast sparks + 5 hot debris
-- [x] Laser beam rendering: segmented core + glow, distance fade, obstacle blocking
-- [x] Drone laser beams: thin team-colored lines from drone to target
-- [x] Torpedo exhaust plume: 200 particles/s, tan color
-- [x] Railgun charge glow: bright circle scaling with charge progress
-- [x] Cloak visuals: own ship 40% opacity, allies 50%, enemies shimmer (8% + sine wave)
-- [x] Pulse ready indicator: subtle green circle around Drone Commander
-- [ ] Heavy cannon smoke trail (~0.3s orange trail behind projectile)
-- [ ] Torpedo lock-on indicator (flashing red diamond on targeted ship)
-- [ ] Shield impact ripple effect (Powerplant shield — depends on Phase 4.2)
-- [ ] Damage flash: brief white flash on ship when hit
-- [ ] Railgun beam effect: instantaneous thick line across screen (~0.15s fade)
+No audio exists. This is the largest remaining effort:
 
-### 5.3 Audio ❌
-
-- Engine hum: looping sound, pitch shifts with velocity magnitude
-- Weapon sounds: distinct per weapon type (autocannon rattle, cannon boom, laser hum, torpedo whoosh, railgun charge+crack)
-- Explosion: ship destruction, torpedo detonation, mine detonation (varying intensity)
-- Ambient space: low background drone
-- Capture progress: rising tone while capturing, alert tone when zone flips
-- Shield impact: energy crackle
-- UI sounds: selection clicks, respawn chime
-
-### 5.4 Collision Polish ❌
-
-- Ship-to-ship: both take damage proportional to relative impact velocity, faster ship takes 1.2x more
-- Ship-to-asteroid: damage based on impact velocity (threshold: no damage below 100 velocity)
-- Screen shake: intensity scales with impact force, short duration (0.1–0.3s)
-- Impact particles: sparks at collision point
+- Engine hum: looping tone, pitch scales with speed
+- Weapon sounds per type: autocannon rapid rattle, heavy cannon boom, laser sustained hum, torpedo whoosh, railgun charge whine + crack
+- Explosion variants: ship destruction (large), torpedo detonation (medium), mine detonation (sharp)
+- Ambient: low background drone
+- Zone events: rising capture tone, alert sting on zone flip
+- Powerplant: energy crackle on shield impact
+- UI: class selection click, respawn chime
 
 ---
 
-## Phase 6: Polish and Infrastructure
+## Phase 6: Infrastructure & Meta
 
-### 6.1 Lobby System ❌
+### 6.1 Balance Pass 🔧 (ongoing)
 
-- Server browser: query running servers, show player count, ping
-- Or simple matchmaking: queue → auto-assign to available server
-- Team balancing on join (assign to smaller team)
-- Ship class selection in lobby (changeable until round starts)
-- Ready-up system: round starts when all players ready (or timeout)
+Driven by playtesting. Tune iteratively:
 
-### 6.2 Balance Pass ❌
+- Weapon damage, fire rates, speeds, ranges per class
+- Zone capture/decap rates, objective defense strengths
+- Ship HP, mass, thrust, speed caps
+- Fuel/ammo consumption and regen
+- Drone counts, drone AI aggression, HP
+- Zone benefit magnitudes (HP regen, resupply rates)
 
-- Tune all weapon damage, fire rates, projectile speeds, ranges
-- Tune capture speeds, objective defense strengths, zone radii
-- Tune fuel/ammo consumption and regen rates (passive vs at-objective)
-- Tune drone counts, drone AI aggression, drone HP
-- Tune ship HP, mass, thrust values, speed caps
-- Tune objective defense parameters (railgun cooldown, shield strength, drone count)
-- Playtest-driven iteration with metrics logging
+### 6.2 Server Infrastructure 🔧
 
-### 6.3 Server Infrastructure 🔧
-
-- [x] Dedicated headless server binary (MinimalPlugins + ScheduleRunnerPlugin, no GPU)
+- [x] Dedicated headless server (MinimalPlugins + ScheduleRunnerPlugin, no GPU)
 - [x] Deployed to DigitalOcean VPS (178.128.206.71)
-- [x] WebTransport with self-signed certs (server prints cert hash on startup)
-- [ ] Containerization (Docker)
-- [ ] Multiple server region support
-- [ ] Connection quality monitoring and adaptive send rates
+- [x] WebTransport with self-signed certs
+- [ ] Docker containerization
+- [ ] Connection quality monitoring / adaptive send rate
 
-### 6.4 Anti-cheat ❌
+### 6.3 Lobby System ❌ (stretch)
 
-- Server-authoritative validation (already built-in via architecture)
-- Input sanity checks: rate limiting, impossible input combinations, input timing validation
-- Position reconciliation bounds: reject client predictions that diverge too far from server state
-- Kick/ban system for repeated violations
+- Server browser or simple matchmaking (queue → auto-assign)
+- Ready-up system: round starts when all players ready or on timeout
+- Class selection locked at round start
+
+### 6.4 Anti-cheat ❌ (stretch)
+
+- Architecture is already server-authoritative (primary protection in place)
+- Input sanity checks: rate limiting, impossible combinations, timing validation
+- Position reconciliation bounds: reject wildly diverged predictions
 
 ---
 
 ## Current Progress
 
 ```text
-Phase 1: Foundation ✅ ─── project structure → networking → ship movement
-Phase 2: World ✅ ─────── asteroids ✅ → tridrants ✅ → minimap ✅ → HUD ✅ → nebula ✅
-Phase 3: Combat ✅ ─────── all 5 classes ✅ → route planner ✅ → VFX ✅ → class selection ✅
-Phase 4: Objectives 🔧 ── zone control ✅ → scoring ✅ → defenses 🔧 → benefits 🔧 → rounds ❌
-Phase 5: Game Feel 🔧 ── particles ✅ → combat VFX ✅ → fog ❌ → audio ❌ → collision polish ❌
-Phase 6: Polish 🔧 ────── headless server ✅ → deployment ✅ → lobby ❌ → balance ❌
+Phase 1: Foundation  ✅ ── project structure → networking → physics → prediction
+Phase 2: World       ✅ ── map → asteroids → nebula → minimap → HUD → VFX
+Phase 3: Combat      ✅ ── 5 classes → all weapons → drones → autopilot → class picker
+Phase 4: Objectives  🔧 ── capture ✅ → defenses ✅ → benefits ✅ → round mgmt 🔧
+Phase 5: Polish      ❌ ── combat feedback → readability → fog of war → audio
+Phase 6: Meta        🔧 ── server infra 🔧 → balance 🔧 → lobby ❌ → anti-cheat ❌
 ```
 
-### Design Decisions to Revisit
+### Design Decisions Resolved
 
-These items differ between the design doc and the current implementation. They need a deliberate decision during playtesting:
+1. **Capture mechanic**: gradual progress with diminishing returns — done ✅
+2. **Win condition**: score-to-100 KotH — playtest to decide if elimination win (0 objectives = lose) should also apply
 
-1. **Win condition**: Design says "team with 0 objectives loses"; implementation uses score-to-100 king-of-the-hill. Could support both (score win + elimination win).
-2. **Capture mechanic**: Design says constant rate regardless of ship count; implementation uses instant majority-based control. Need gradual progress for more strategic depth.
-3. **Railgun projectile vs raycast**: Design says instant-hit raycast; implementation fires a very fast projectile (3500 speed). Projectile approach may be better for networking (visible travel, dodgeable at extreme range).
-4. **Torpedo lock-on**: Design says 1s lock-on before launch; implementation fires immediately. Lock-on would add counterplay (warning indicator on target).
-5. **Capturing breaks Sniper cloak**: Design doc specifies this; not implemented yet. Adds interesting tradeoff.
+### Design Decisions Still Open
+
+1. **Railgun: projectile vs raycast** — currently a fast projectile (3000px/s). Projectile is better for networking (visible, dodgeable). Keep unless it feels wrong during playtesting.
+2. **Torpedo lock-on** — currently fires immediately. A 1s lock-on warning before launch would add counterplay. Implement as part of Phase 5.1.
+3. **Capturing breaks Sniper cloak** — design doc specifies this; not implemented. Low complexity addition with interesting tradeoff.
 
 ### Next Up
 
-1. **Phase 4.1**: Gradual capture progress + visual feedback (zone ring color shifts)
-2. **Phase 4.2**: Objective defenses (Factory, Railgun turret, Powerplant shield) — the most ambitious remaining feature
-3. **Phase 4.3**: Zone benefits (repair/resupply/respawn)
-4. **Phase 4.4**: Round management (restart, stats, countdown)
-5. **Phase 5**: Damage flash, collision damage, fog of war, audio
-
-Each phase builds on the previous. Phases are playable milestones — after each one, the game is testable and demonstrable at that level of completeness.
+1. **Phase 4.4**: Victory stats screen + kill feed (closes out objectives phase)
+2. **Phase 5.1**: Railgun beam effect + screen shake (highest combat-feel impact)
+3. **Phase 5.2**: Team labels + kill feed readability
+4. **Phase 5.4**: Audio (largest effort, biggest feel improvement)
+5. **Phase 5.3**: Fog of war (adds strategic depth)
