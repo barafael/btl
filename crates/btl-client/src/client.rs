@@ -48,6 +48,52 @@ fn team_color(team: &Team) -> Color {
     }
 }
 
+/// Spawn a team-color indicator bar that floats above the ship in world space.
+fn spawn_team_label(commands: &mut Commands, ship_entity: Entity, team: &Team, is_local: bool) {
+    let (width, color) = if is_local {
+        let c = match team {
+            Team::Red => LinearRgba::new(2.5, 0.35, 0.2, 1.0),
+            Team::Blue => LinearRgba::new(0.2, 0.55, 2.5, 1.0),
+        };
+        (22.0_f32, Color::LinearRgba(c))
+    } else {
+        let c = match team {
+            Team::Red => Color::srgba(0.9, 0.2, 0.2, 0.65),
+            Team::Blue => Color::srgba(0.2, 0.4, 0.9, 0.65),
+        };
+        (16.0_f32, c)
+    };
+    commands.spawn((
+        ShipLabel,
+        ShipLabelFor(ship_entity),
+        Sprite {
+            color,
+            custom_size: Some(Vec2::new(width, 3.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 1.0),
+        Visibility::Hidden,
+    ));
+}
+
+/// Keep ship label positions in sync with their ships; despawn orphaned labels.
+fn update_ship_labels(
+    mut commands: Commands,
+    mut labels: Query<(Entity, &ShipLabelFor, &mut Transform, &mut Visibility)>,
+    ships: Query<&Transform, (With<ShipInitialized>, Without<ShipLabel>)>,
+) {
+    for (label_entity, ship_ref, mut label_tf, mut vis) in labels.iter_mut() {
+        if let Ok(ship_tf) = ships.get(ship_ref.0) {
+            label_tf.translation.x = ship_tf.translation.x;
+            label_tf.translation.y = ship_tf.translation.y + 32.0;
+            label_tf.translation.z = 1.0;
+            *vis = Visibility::Inherited;
+        } else {
+            commands.entity(label_entity).despawn();
+        }
+    }
+}
+
 fn spawn_gun_barrel(commands: &mut Commands, parent: Entity, pivot_y: f32) {
     commands.spawn((
         ChildOf(parent),
@@ -102,6 +148,14 @@ pub struct LocalShip;
 /// Marker to track that we've already initialized rendering for a predicted entity.
 #[derive(Component)]
 struct ShipInitialized;
+
+/// Team-color indicator bar spawned above each ship.
+#[derive(Component)]
+struct ShipLabel;
+
+/// Points from a ShipLabel back to the ship it tracks.
+#[derive(Component)]
+struct ShipLabelFor(Entity);
 
 /// Marker for asteroid entities that have been given visuals.
 #[derive(Component)]
@@ -676,7 +730,7 @@ impl Plugin for ClientPlugin {
             Startup,
             (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_kill_feed, spawn_class_picker, hide_window_cursor),
         );
-        app.add_systems(Update, (update_victory_overlay, update_kill_feed, shake_on_damage, render_custom_cursor));
+        app.add_systems(Update, (update_victory_overlay, update_kill_feed, shake_on_damage, render_custom_cursor, update_ship_labels));
     }
 }
 
@@ -836,6 +890,7 @@ fn init_predicted_ships(
         } else if *class == ShipClass::DroneCommander {
             spawn_defense_turret_barrels(&mut commands, entity);
         }
+        spawn_team_label(&mut commands, entity, team, is_controlled);
 
         if is_controlled {
             let angular_inertia = 0.5 * mass * radius * radius;
@@ -904,6 +959,7 @@ fn init_interpolated_ships(
         } else if *class == ShipClass::DroneCommander {
             spawn_defense_turret_barrels(&mut commands, entity);
         }
+        spawn_team_label(&mut commands, entity, team, false);
 
         info!(
             "Spawned interpolated {class:?} for {:?} on {:?} team",
