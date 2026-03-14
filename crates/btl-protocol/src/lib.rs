@@ -318,6 +318,22 @@ pub struct ZoneState {
     pub controller: u8,
 }
 
+/// A kill event recorded when a ship is destroyed by another player.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct KillEvent {
+    pub killer_team: Team,
+    pub victim_team: Team,
+    pub victim_class: ShipClass,
+}
+
+/// Per-player end-of-round stats snapshot.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlayerStat {
+    pub peer_id: PeerId,
+    pub team: Team,
+    pub kills: u32,
+}
+
 /// King-of-the-hill team scores. Replicated to all clients.
 #[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct TeamScores {
@@ -327,6 +343,12 @@ pub struct TeamScores {
     pub zones: [ZoneState; 3],
     /// Current round state
     pub round_state: RoundState,
+    /// Recent kills, most-recent first (max KILL_FEED_MAX entries).
+    pub kill_feed: Vec<KillEvent>,
+    /// Per-player kill stats snapshotted at round end; cleared on restart.
+    pub end_stats: Vec<PlayerStat>,
+    /// Which team won the last round; preserved through Restarting phase.
+    pub last_winner: Option<Team>,
 }
 
 // --- Inputs ---

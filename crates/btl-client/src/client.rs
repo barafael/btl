@@ -25,6 +25,7 @@ use btl_shared::{
     TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo,
     ZoneDrone, ZoneRailgun, ZoneShield,
     FACTORY_DRONE_LASER_RANGE, ZONE_SHIELD_RADIUS, RailgunTurretState,
+    ROUND_RESTART_COUNTDOWN,
     compute_intercept, drone_laser_firing, primary_projectile_speed, ray_circle_intersect,
 };
 
@@ -665,9 +666,9 @@ impl Plugin for ClientPlugin {
         );
         app.add_systems(
             Startup,
-            (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_class_picker, hide_window_cursor),
+            (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_kill_feed, spawn_class_picker, hide_window_cursor),
         );
-        app.add_systems(Update, (update_victory_overlay, render_custom_cursor));
+        app.add_systems(Update, (update_victory_overlay, update_kill_feed, render_custom_cursor));
     }
 }
 
@@ -1843,6 +1844,15 @@ struct VictoryOverlay;
 #[derive(Component)]
 struct VictoryText;
 
+#[derive(Component)]
+struct VictoryStatsText;
+
+#[derive(Component)]
+struct VictoryCountdownText;
+
+#[derive(Component)]
+struct KillFeedText;
+
 type HealthBarFilter = (
     With<HealthBarFill>,
     Without<FuelBarFill>,
@@ -2158,15 +2168,55 @@ fn spawn_victory_overlay(mut commands: Commands) {
         ))
         .id();
 
+    let column = commands
+        .spawn((
+            ChildOf(overlay),
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(16.0),
+                ..default()
+            },
+        ))
+        .id();
+
     commands.spawn((
-        ChildOf(overlay),
+        ChildOf(column),
         VictoryText,
         Text::new(""),
-        TextFont {
-            font_size: 48.0,
+        TextFont { font_size: 48.0, ..default() },
+        TextColor(Color::WHITE),
+    ));
+    commands.spawn((
+        ChildOf(column),
+        VictoryStatsText,
+        Text::new(""),
+        TextFont { font_size: 18.0, ..default() },
+        TextColor(Color::srgba(0.85, 0.85, 0.85, 1.0)),
+    ));
+    commands.spawn((
+        ChildOf(column),
+        VictoryCountdownText,
+        Text::new(""),
+        TextFont { font_size: 22.0, ..default() },
+        TextColor(Color::srgba(0.65, 0.65, 0.65, 1.0)),
+    ));
+}
+
+/// Spawn a kill feed text node in the top-right corner.
+fn spawn_kill_feed(mut commands: Commands) {
+    commands.spawn((
+        KillFeedText,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(58.0),
+            right: Val::Px(12.0),
             ..default()
         },
-        TextColor(Color::WHITE),
+        Text::new(""),
+        TextFont { font_size: 13.0, ..default() },
+        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
+        GlobalZIndex(100),
     ));
 }
 
@@ -2174,43 +2224,136 @@ fn spawn_victory_overlay(mut commands: Commands) {
 fn update_victory_overlay(
     scores_q: Query<&TeamScores>,
     mut overlay_q: Query<&mut Visibility, With<VictoryOverlay>>,
-    mut text_q: Query<(&mut Text, &mut TextColor), With<VictoryText>>,
+    mut title_q: Query<(&mut Text, &mut TextColor), With<VictoryText>>,
+    mut stats_q: Query<
+        &mut Text,
+        (With<VictoryStatsText>, Without<VictoryText>, Without<VictoryCountdownText>),
+    >,
+    mut countdown_q: Query<
+        &mut Text,
+        (With<VictoryCountdownText>, Without<VictoryText>, Without<VictoryStatsText>),
+    >,
 ) {
     let Ok(scores) = scores_q.single() else {
         return;
     };
-
     let Ok(mut vis) = overlay_q.single_mut() else {
         return;
+    };
+
+    let show_winner = |winner: Team,
+                       title_q: &mut Query<(&mut Text, &mut TextColor), With<VictoryText>>,
+                       stats_q: &mut Query<&mut Text, (With<VictoryStatsText>, Without<VictoryText>, Without<VictoryCountdownText>)>,
+                       countdown_q: &mut Query<&mut Text, (With<VictoryCountdownText>, Without<VictoryText>, Without<VictoryStatsText>)>,
+                       end_stats: &[PlayerStat]| {
+        if let Ok((mut text, mut color)) = title_q.single_mut() {
+            match winner {
+                Team::Red => {
+                    **text = "RED TEAM WINS".into();
+                    *color = TextColor(Color::srgb(1.0, 0.3, 0.3));
+                }
+                Team::Blue => {
+                    **text = "BLUE TEAM WINS".into();
+                    *color = TextColor(Color::srgb(0.3, 0.6, 1.0));
+                }
+            }
+        }
+        if let Ok(mut text) = stats_q.single_mut() {
+            if end_stats.is_empty() {
+                **text = "".into();
+            } else {
+                let lines: Vec<String> = end_stats
+                    .iter()
+                    .map(|s| {
+                        let team = match s.team {
+                            Team::Red => "RED",
+                            Team::Blue => "BLUE",
+                        };
+                        let word = if s.kills == 1 { "kill" } else { "kills" };
+                        format!("{}  {} {}", team, s.kills, word)
+                    })
+                    .collect();
+                **text = lines.join("\n");
+            }
+        }
+        if let Ok(mut text) = countdown_q.single_mut() {
+            **text = "".into();
+        }
     };
 
     match scores.round_state {
         RoundState::Playing => {
             *vis = Visibility::Hidden;
         }
-        RoundState::Won(team) => {
+        RoundState::Won(winner) => {
             *vis = Visibility::Inherited;
-            if let Ok((mut text, mut color)) = text_q.single_mut() {
-                match team {
-                    Team::Red => {
-                        **text = "RED TEAM WINS".into();
-                        *color = TextColor(Color::srgb(1.0, 0.3, 0.3));
-                    }
-                    Team::Blue => {
-                        **text = "BLUE TEAM WINS".into();
-                        *color = TextColor(Color::srgb(0.3, 0.3, 1.0));
-                    }
+            show_winner(winner, &mut title_q, &mut stats_q, &mut countdown_q, &scores.end_stats);
+        }
+        RoundState::Restarting(remaining) => {
+            *vis = Visibility::Inherited;
+            if remaining > ROUND_RESTART_COUNTDOWN {
+                // Display phase: show winner + stats
+                if let Some(winner) = scores.last_winner {
+                    show_winner(winner, &mut title_q, &mut stats_q, &mut countdown_q, &scores.end_stats);
+                }
+            } else {
+                // Countdown phase: clear details, show timer
+                if let Ok((mut text, mut color)) = title_q.single_mut() {
+                    **text = "".into();
+                    *color = TextColor(Color::WHITE);
+                }
+                if let Ok(mut text) = stats_q.single_mut() {
+                    **text = "".into();
+                }
+                if let Ok(mut text) = countdown_q.single_mut() {
+                    **text = format!("Next round in {}...", remaining.ceil() as u32);
                 }
             }
         }
-        RoundState::Restarting(countdown) => {
-            *vis = Visibility::Inherited;
-            if let Ok((mut text, mut color)) = text_q.single_mut() {
-                **text = format!("Next round in {}...", countdown.ceil() as u32);
-                *color = TextColor(Color::WHITE);
-            }
-        }
     }
+}
+
+/// Update kill feed text from the replicated TeamScores kill_feed.
+fn update_kill_feed(
+    scores_q: Query<Ref<TeamScores>>,
+    mut feed_q: Query<&mut Text, With<KillFeedText>>,
+) {
+    let Ok(scores) = scores_q.single() else {
+        return;
+    };
+    if !scores.is_changed() {
+        return;
+    }
+    let Ok(mut text) = feed_q.single_mut() else {
+        return;
+    };
+    if scores.kill_feed.is_empty() {
+        **text = "".into();
+        return;
+    }
+    let lines: Vec<String> = scores
+        .kill_feed
+        .iter()
+        .map(|e| {
+            let killer = match e.killer_team {
+                Team::Red => "RED",
+                Team::Blue => "BLU",
+            };
+            let victim = match e.victim_team {
+                Team::Red => "RED",
+                Team::Blue => "BLU",
+            };
+            let class = match e.victim_class {
+                ShipClass::Interceptor => "Interceptor",
+                ShipClass::Gunship => "Gunship",
+                ShipClass::TorpedoBoat => "Torpedo",
+                ShipClass::Sniper => "Sniper",
+                ShipClass::DroneCommander => "Carrier",
+            };
+            format!("{} → {} {}", killer, victim, class)
+        })
+        .collect();
+    **text = lines.join("\n");
 }
 
 /// Update score HUD from replicated TeamScores.

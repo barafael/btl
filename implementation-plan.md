@@ -188,8 +188,8 @@ All implemented and active when inside a friendly-controlled zone:
 
 - [x] Round restart: despawns all projectiles/mines/torpedoes/drones/zone defense entities, resets HP/fuel/ammo/spawn protection on all ships, resets zone progress to neutral
 - [x] Spawn protection: 3s invulnerability after every spawn/respawn (SpawnProtection component)
-- [ ] Victory stats screen: show kills, damage dealt, zones captured per player at round end
-- [ ] Kill feed: scrolling in-game event log (killed X, Y captured zone)
+- [x] Victory stats screen: kill counts per player shown on round-end overlay
+- [x] Kill feed: top-right scrolling log (last 5 kills with team + class)
 - [ ] Team labels: player name / team-color indicator above each ship
 - [ ] Team reshuffle between rounds (rebalance if teams are uneven)
 - [ ] Match structure: best of N rounds with series score (stretch)

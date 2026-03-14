@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
@@ -41,7 +42,7 @@ use btl_shared::{
     ZONE_RAILGUN_LOCK_TIME, ZONE_RAILGUN_DAMAGE, ZONE_RAILGUN_COOLDOWN,
     ZONE_RAILGUN_PROJECTILE_SPEED, ZONE_RAILGUN_PROJECTILE_LIFETIME,
     ZONE_SHIELD_RADIUS, RailgunTurretState,
-    ROUND_END_DISPLAY_TIME, ROUND_RESTART_COUNTDOWN,
+    ROUND_END_DISPLAY_TIME, ROUND_RESTART_COUNTDOWN, KILL_FEED_MAX,
 };
 
 /// Server-only component tracking drone squad state for Drone Commander ships.
@@ -72,6 +73,13 @@ struct PendingRespawn {
 #[derive(Resource, Default)]
 struct RespawnQueue(Vec<PendingRespawn>);
 
+/// Per-player kill counts accumulated during the current round.
+#[derive(Resource, Default)]
+struct MatchStats {
+    /// Maps PeerId → (team, kill_count)
+    kills: HashMap<PeerId, (Team, u32)>,
+}
+
 const RESPAWN_DELAY: f32 = 3.0;
 
 pub struct ServerPlugin;
@@ -84,6 +92,7 @@ impl Plugin for ServerPlugin {
 
         app.init_resource::<RespawnQueue>();
         app.init_resource::<ZoneDefenseTimers>();
+        app.init_resource::<MatchStats>();
         app.add_systems(
             Startup,
             (start_server, spawn_asteroids, spawn_nebula, spawn_scores),
@@ -427,22 +436,46 @@ fn despawn_dead_ships(
         &ControlledBy,
         &LastDamagedBy,
     )>,
+    all_ships: Query<(&PlayerId, &Team)>,
     mut respawn_queue: ResMut<RespawnQueue>,
+    mut stats: ResMut<MatchStats>,
+    mut scores_q: Query<&mut TeamScores>,
 ) {
     for (entity, health, player_id, team, class, controlled_by, last_hit) in query.iter() {
         if health.current <= 0.0 {
-            if let Some(killer) = last_hit.attacker {
-                info!(
-                    "Ship {:?} destroyed (player {:?}) — killed by {:?}",
-                    entity, player_id.0, killer
-                );
+            let victim_peer = player_id.0;
+            let victim_team = *team;
+            let victim_class = *class;
+
+            if let Some(killer_peer) = last_hit.attacker {
+                // Find killer's team by scanning live ships
+                let killer_team = all_ships
+                    .iter()
+                    .find(|(pid, _)| pid.0 == killer_peer)
+                    .map(|(_, t)| *t);
+
+                if let Some(killer_team) = killer_team {
+                    let entry = stats.kills.entry(killer_peer).or_insert((killer_team, 0));
+                    entry.1 += 1;
+
+                    if let Ok(mut scores) = scores_q.single_mut() {
+                        scores.kill_feed.insert(0, KillEvent {
+                            killer_team,
+                            victim_team,
+                            victim_class,
+                        });
+                        scores.kill_feed.truncate(KILL_FEED_MAX);
+                    }
+                }
+                info!("Ship destroyed (player {:?}) — killed by {:?}", victim_peer, killer_peer);
             } else {
-                info!("Ship {:?} destroyed (player {:?})", entity, player_id.0);
+                info!("Ship destroyed (player {:?})", victim_peer);
             }
+
             respawn_queue.0.push(PendingRespawn {
-                peer_id: player_id.0,
-                team: *team,
-                class: *class,
+                peer_id: victim_peer,
+                team: victim_team,
+                class: victim_class,
                 link_entity: controlled_by.owner,
                 timer: RESPAWN_DELAY,
             });
@@ -1341,6 +1374,7 @@ fn round_management(
     mut scores_q: Query<&mut TeamScores>,
     mut commands: Commands,
     mut timers: ResMut<ZoneDefenseTimers>,
+    mut match_stats: ResMut<MatchStats>,
     zone_drones: Query<Entity, With<ZoneDrone>>,
     zone_railguns: Query<Entity, With<ZoneRailgun>>,
     zone_shields: Query<Entity, With<ZoneShield>>,
@@ -1358,8 +1392,17 @@ fn round_management(
 
     match scores.round_state {
         RoundState::Playing => {}
-        RoundState::Won(_team) => {
-            // After winning, transition to countdown after a display pause
+        RoundState::Won(winner) => {
+            // Snapshot per-player kill stats for the victory screen
+            let mut end_stats: Vec<PlayerStat> = match_stats.kills.iter()
+                .map(|(peer, (team, kills))| PlayerStat { peer_id: *peer, team: *team, kills: *kills })
+                .collect();
+            end_stats.sort_by(|a, b| b.kills.cmp(&a.kills));
+            scores.end_stats = end_stats;
+            scores.last_winner = Some(winner);
+            scores.kill_feed.clear();
+            *match_stats = MatchStats::default();
+
             scores.round_state = RoundState::Restarting(ROUND_END_DISPLAY_TIME + ROUND_RESTART_COUNTDOWN);
         }
         RoundState::Restarting(remaining) => {
@@ -1369,6 +1412,8 @@ fn round_management(
                 scores.red = 0.0;
                 scores.blue = 0.0;
                 scores.zones = [ZoneState::default(); 3];
+                scores.end_stats.clear();
+                scores.last_winner = None;
                 scores.round_state = RoundState::Playing;
 
                 // Reset defense timers
