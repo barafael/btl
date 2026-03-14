@@ -214,12 +214,24 @@ All ships are medium weight with similar HP, speed, and mass. Differentiated by 
 - Fog of war — rewards stealth ship and scouting
 - Radar returns for cloaked Sniper (inaccurate shimmer on minimap)
 
+## Implementation Notes
+
+These items diverge between this design doc and the current implementation. Decisions pending playtesting:
+
+- **Win condition**: Currently score-to-100 king-of-the-hill (1 pt/sec per controlled zone). Design says "team with 0 objectives loses". Could layer both.
+- **Capture mechanic**: Currently instant majority-based (more ships = control). Design says constant rate regardless of ship count. Gradual progress (0→1) not yet implemented.
+- **Railgun**: Fires a very fast projectile (3500 speed, 2.4s lifetime) instead of instant raycast. Better for networking and adds extreme-range dodgeability.
+- **Torpedo launch**: Fires immediately on input. Design says 1s lock-on first. Lock-on would add counterplay via warning indicator on target.
+- **MAP_RADIUS**: 10000 (not 6000 as mentioned in some older notes).
+- **Drone Commander turrets**: Fire projectiles, not lasers. Design describes them as "defense lasers" but implementation uses auto-targeting turrets with projectile rounds.
+- **Wrecks**: Not implemented. Design says "drift for 10 seconds then fade."
+- **Spawn protection**: Not implemented. Design says 2–3s invulnerability.
+- **Capturing breaks cloak**: Not implemented yet.
+
 ## Open Questions (defer to prototyping)
 
-- Exact capture zone radius and capture speed
 - Passive decap rate (how fast unattended objectives drift to neutral)
 - Last-stand defense bonus values (how much stronger the final objective gets)
-- Drone AI behavior (formation, scatter, focus-fire)
 - Railgun objective cooldown between shots
 - Powerplant shield HP pool and torpedo damage to shield
 - Spawn protection duration (2–3s range)

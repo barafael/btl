@@ -28,7 +28,7 @@ use btl_shared::{
     TURRET_RANGE, TURRET_SLEW_RATE, TURRET_SPEED, Torpedo, ZONE_SCORE_RATE,
     CollisionGrids, FIXED_DT, MAX_ASTEROID_RADIUS, MAX_SHIP_RADIUS,
     generate_asteroid_layout, objective_zone_positions, ray_circle_intersect,
-    CAPTURE_RATE, DAMAGE_FLASH_DURATION, DamageFlash, SpawnProtection, ship_radius,
+    CAPTURE_RATE, DECAP_RATE, DAMAGE_FLASH_DURATION, DamageFlash, SpawnProtection, ship_radius,
     COLLISION_DAMAGE_VELOCITY_THRESHOLD, COLLISION_DAMAGE_PER_VELOCITY, COLLISION_FASTER_SHIP_MULT,
     ZONE_HP_REGEN, ZONE_REGEN_MULT, AMMO_REGEN_RATE, FUEL_REGEN_RATE,
     GUNSHIP_AMMO_REGEN, TBOAT_AMMO_REGEN, SNIPER_AMMO_REGEN, DCOMMANDER_AMMO_REGEN,
@@ -1298,8 +1298,15 @@ fn update_zone_scores(
         } else if blue > red {
             let rate = CAPTURE_RATE * capture_speed_mult(blue - red);
             zone.progress = (zone.progress + rate * dt).min(1.0);
+        } else if red == 0 {
+            // Empty zone: drift toward neutral
+            if zone.progress > 0.0 {
+                zone.progress = (zone.progress - DECAP_RATE * dt).max(0.0);
+            } else if zone.progress < 0.0 {
+                zone.progress = (zone.progress + DECAP_RATE * dt).min(0.0);
+            }
         }
-        // Equal or empty = frozen (no change)
+        // Contested (equal non-zero) = frozen (no change)
 
         // Update controller based on progress
         if zone.progress <= -1.0 {

@@ -6,6 +6,8 @@ edition = "2024"
 [features]
 default = ["native"]
 native = ["dep:clap"]
+webgl = ["bevy/webgl2"]
+webgpu = ["bevy/webgpu"]
 
 [dependencies]
 btl-protocol = { path = "../btl-protocol" }
@@ -29,9 +31,8 @@ clap = { version = "4", features = ["derive"], optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lightyear = { version = "0.26.4", features = ["webtransport_dangerous_configuration"] }
 
-# WASM: WebGL2 for broad browser compatibility + getrandom js support
+# WASM: getrandom js support + browser APIs
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy = { version = "0.18.1", features = ["webgl2"] }
 getrandom = { version = "0.2", features = ["js"] }
 web-sys = { version = "0.3", features = ["Window", "Location"] }
 console_error_panic_hook = "0.1"

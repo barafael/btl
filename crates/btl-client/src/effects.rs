@@ -61,12 +61,27 @@ fn detect_despawned_effects(
     mut removed_ships: RemovedComponents<PlayerId>,
     mut removed_drones: RemovedComponents<Drone>,
     mut rng: ResMut<EffectRng>,
+    ships: Query<&Position, With<PlayerId>>,
 ) {
     for entity in removed_projectiles.read() {
         if let Some(&(pos, lifetime)) = cache.projectiles.get(&entity)
             && lifetime > 0.2
         {
-            spawn_impact_sparks(&mut commands, pos, &mut rng);
+            // Snap impact to the nearest ship if it's within hit range,
+            // compensating for the one-frame position lag in the cache.
+            const SNAP_DIST_SQ: f32 = 30.0 * 30.0;
+            let impact_pos = ships
+                .iter()
+                .map(|p| p.0)
+                .filter(|&sp| (sp - pos).length_squared() < SNAP_DIST_SQ)
+                .min_by(|a, b| {
+                    (a - pos)
+                        .length_squared()
+                        .partial_cmp(&(b - pos).length_squared())
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .unwrap_or(pos);
+            spawn_impact_sparks(&mut commands, impact_pos, &mut rng);
         }
     }
 

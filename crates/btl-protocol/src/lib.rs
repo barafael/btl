@@ -229,12 +229,93 @@ pub struct LastDamagedBy {
     pub attacker: Option<PeerId>,
 }
 
+/// Spawn invulnerability timer. Ship cannot take damage while > 0.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct SpawnProtection {
+    pub remaining: f32,
+}
+
+/// Damage flash timer. Client uses this to render a white flash overlay.
+/// Set by server when damage is taken; ticks down on both sides.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct DamageFlash {
+    pub timer: f32,
+}
+
+/// Which type of defense each objective zone has.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Copy)]
+pub enum ObjectiveKind {
+    /// 11 defense drones (4 kamikaze, 7 laser)
+    Factory,
+    /// Auto-targeting railgun turret with telegraph
+    Railgun,
+    /// Energy shield bubble deflecting projectiles
+    Powerplant,
+}
+
+/// Defense drone belonging to an objective zone (Factory).
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ZoneDrone {
+    pub zone_index: u8,
+    pub team: Team,
+    pub kind: DroneKind,
+    pub health: f32,
+}
+
+/// Auto-turret at a Railgun objective zone.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ZoneRailgun {
+    pub zone_index: u8,
+    pub team: Team,
+    /// Current aim angle in world-space radians.
+    pub aim_angle: f32,
+    /// Charge progress: 0.0 to 1.0
+    pub charge: f32,
+    /// Cooldown remaining after firing.
+    pub cooldown: f32,
+    /// State machine: Tracking, Locked (telegraph pause), Firing, Cooldown
+    pub state: RailgunTurretState,
+}
+
+/// Railgun turret state machine.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Copy, Default)]
+pub enum RailgunTurretState {
+    /// No valid target
+    #[default]
+    Idle,
+    /// Tracking a target, building charge
+    Tracking,
+    /// Locked on — brief pause before firing (telegraph)
+    Locked(f32),
+    /// Cooling down after shot
+    Cooldown,
+}
+
+/// Energy shield bubble at a Powerplant objective zone.
+#[derive(Component, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ZoneShield {
+    pub zone_index: u8,
+    pub team: Team,
+    pub active: bool,
+}
+
 /// Round state: 0=Playing, 1=Red won, 2=Blue won.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, Copy)]
 pub enum RoundState {
     #[default]
     Playing,
     Won(Team),
+    /// Countdown to next round (seconds remaining).
+    Restarting(f32),
+}
+
+/// Per-zone capture state.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, Copy)]
+pub struct ZoneState {
+    /// Capture progress: -1.0 = fully Red, 0.0 = neutral, 1.0 = fully Blue
+    pub progress: f32,
+    /// Current controller: 0=neutral, 1=Red, 2=Blue
+    pub controller: u8,
 }
 
 /// King-of-the-hill team scores. Replicated to all clients.
@@ -242,8 +323,8 @@ pub enum RoundState {
 pub struct TeamScores {
     pub red: f32,
     pub blue: f32,
-    /// Per-zone controller: 0=contested/empty, 1=Red, 2=Blue
-    pub zone_control: [u8; 3],
+    /// Per-zone capture state (3 zones)
+    pub zones: [ZoneState; 3],
     /// Current round state
     pub round_state: RoundState,
 }
@@ -307,5 +388,10 @@ impl Plugin for ProtocolPlugin {
         app.register_component::<RailgunCharge>();
         app.register_component::<Drone>();
         app.register_component::<TeamScores>();
+        app.register_component::<SpawnProtection>();
+        app.register_component::<DamageFlash>();
+        app.register_component::<ZoneDrone>();
+        app.register_component::<ZoneRailgun>();
+        app.register_component::<ZoneShield>();
     }
 }

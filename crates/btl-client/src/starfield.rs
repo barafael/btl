@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-const STAR_COUNT: usize = 400;
+const STAR_COUNT: usize = 160;
 const FIELD_HALF_SIZE: f32 = 2000.0;
 const STAR_LAYERS: &[(f32, f32, Color)] = &[
     // (parallax_factor, size, color)

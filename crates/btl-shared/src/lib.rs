@@ -290,6 +290,9 @@ pub const ROUND_RESTART_COUNTDOWN: f32 = 3.0;
 /// Base capture rate per second (progress per second with 1 ship)
 /// Diminishing returns: 1x, 1.5x, 1.8x, 2.0x for 1-4 ships
 pub const CAPTURE_RATE: f32 = 0.1;
+/// Rate at which an uncontested zone drifts back toward neutral (progress per second).
+/// ~50s to fully decap from max; contested (equal ships) zones stay frozen.
+pub const DECAP_RATE: f32 = 0.02;
 
 /// Spawn invulnerability duration (seconds)
 pub const SPAWN_PROTECTION_DURATION: f32 = 3.0;

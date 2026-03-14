@@ -137,7 +137,7 @@ fn main() {
 
 fn setup_camera(mut commands: Commands) {
     let projection = Projection::Orthographic(OrthographicProjection {
-        scale: 2.4,
+        scale: 2.67,
         ..OrthographicProjection::default_2d()
     });
 
