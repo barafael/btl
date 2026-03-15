@@ -206,15 +206,15 @@ All implemented and active when inside a friendly-controlled zone:
 - [x] Railgun beam: 14000px team-colored line, quadratic fade over 0.15s
 - [x] Shield impact ripple: expanding dual-ring gizmo at bounce contact point
 - [x] Screen shake: 0.2s decaying sinusoidal shake on local ship hit
-- [ ] Heavy cannon smoke trail: ~0.3s fading orange trail behind Gunship projectile
-- [ ] Torpedo lock-on indicator: flashing red diamond above targeted ship
+- [x] Heavy cannon smoke trail: ~0.3s fading orange trail behind Gunship projectile
+- [x] Torpedo lock-on indicator: flashing red diamond above targeted ship
 
 ### 5.2 Readability ✅
 
 - [x] Kill feed: top-right scrolling log, team-colored spans (RED/BLU labels)
 - [x] Team labels: world-space sprite above each ship, team-colored, upright
 - [x] Zone capture arc: filled radial arc inside zone ring, scales with progress
-- [ ] Team color indicators on HUD bars (health bar tinted to team color)
+- [x] Team color indicators on HUD bars (health bar tinted to team color)
 
 ### 5.3 Fog of War ❌
 

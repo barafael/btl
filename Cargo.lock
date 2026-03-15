@@ -2149,10 +2149,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "btl-sfx-gen"
-version = "0.1.0"
-
-[[package]]
 name = "btl-shared"
 version = "0.1.0"
 dependencies = [
