@@ -226,17 +226,10 @@ Adds strategic depth; minimap becomes meaningful information asymmetry:
 - Objective zones always visible (fixed known locations)
 - Enemies outside sensor range: hidden from minimap, still visible in main view if on-screen
 
-### 5.4 Audio ✅
+### 5.4 Audio ❌
 
-- [x] Engine hum: looping, pitch 0.55–1.4× with local ship speed
-- [x] Ambient drone: always-on 8s loop at 8% volume
-- [x] Weapon sounds: autocannon, heavy cannon, laser loop, torpedo whoosh, railgun charge + fire
-- [x] Explosions: ship death (large), torpedo/mine (medium) — RemovedComponents detection
-- [x] Zone events: capture ding at 95% progress, flip sting on ownership change
-- [x] Respawn chime: on subsequent local ship spawns
-- [x] btl-sfx-gen: standalone generator crate, all sounds synthesized from pure math (LCG noise, IIR lowpass, waveform math)
-- [ ] Shield impact crackle (Powerplant)
-- [ ] Class selection click
+Procedural synthesis prototype was implemented and removed (sounds were not satisfying).
+Revisit with higher-quality synthesis or real assets.
 
 ---
 
@@ -261,11 +254,15 @@ Driven by playtesting. Tune iteratively:
 - [ ] Docker containerization
 - [ ] Connection quality monitoring / adaptive send rate
 
-### 6.3 Lobby System ❌ (stretch)
+### 6.3 Lobby System ✅
 
-- Server browser or simple matchmaking (queue → auto-assign)
-- Ready-up system: round starts when all players ready or on timeout
-- Class selection locked at round start
+- [x] Ready-up system: SPACE to toggle ready; round starts when all connected players are ready
+- [x] 5s countdown once all ready; aborted if any player un-readies
+- [x] Lobby overlay: shows connected players (team, class, ready badge), status text, key hints
+- [x] Weapons + zone captures blocked during lobby/countdown; ships can still move
+- [x] After each round, returns to lobby; players must re-ready for next round
+- [x] Class picker (Tab) works freely during lobby for pre-selecting class
+- [ ] Server browser / matchmaking (stretch)
 
 ### 6.4 Anti-cheat ❌ (stretch)
 
@@ -282,8 +279,8 @@ Phase 1: Foundation  ✅ ── project structure → networking → physics →
 Phase 2: World       ✅ ── map → asteroids → nebula → minimap → HUD → VFX
 Phase 3: Combat      ✅ ── 5 classes → all weapons → drones → autopilot → class picker
 Phase 4: Objectives  🔧 ── capture ✅ → defenses ✅ → benefits ✅ → round mgmt 🔧
-Phase 5: Polish      ❌ ── combat feedback → readability → fog of war → audio
-Phase 6: Meta        🔧 ── server infra 🔧 → balance 🔧 → lobby ❌ → anti-cheat ❌
+Phase 5: Polish      🔧 ── combat feedback ✅ → readability ✅ → fog of war ✅ → audio ❌
+Phase 6: Meta        🔧 ── server infra 🔧 → balance 🔧 → lobby ✅ → anti-cheat ❌
 ```
 
 ### Design Decisions Resolved

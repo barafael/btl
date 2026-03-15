@@ -196,6 +196,10 @@ struct GunBarrel;
 #[derive(Component)]
 struct TurretBarrel(usize);
 
+/// Whether the local player has pressed ready in the lobby.
+#[derive(Resource, Default)]
+struct LocalLobbyReady(bool);
+
 /// Tracks the class picker overlay state.
 #[derive(Resource, Default)]
 struct ClassPicker {
@@ -649,6 +653,7 @@ impl Plugin for ClientPlugin {
         app.init_resource::<CameraZoom>();
         app.init_resource::<CameraShake>();
         app.init_resource::<RoutePlanner>();
+        app.init_resource::<LocalLobbyReady>();
         // Pre-select class from BTL_AP_CLASS env var so it spawns immediately on connect (tuning mode).
         let ap_class = ship_class_from_env();
         app.insert_resource(ClassPicker {
@@ -724,9 +729,9 @@ impl Plugin for ClientPlugin {
         );
         app.add_systems(
             Startup,
-            (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_kill_feed, spawn_class_picker, hide_window_cursor),
+            (spawn_hud, spawn_score_hud, spawn_victory_overlay, spawn_kill_feed, spawn_class_picker, spawn_lobby_overlay, hide_window_cursor),
         );
-        app.add_systems(Update, (update_victory_overlay, update_kill_feed, shake_on_damage, render_custom_cursor, update_ship_labels));
+        app.add_systems(Update, (update_victory_overlay, update_kill_feed, shake_on_damage, render_custom_cursor, update_ship_labels, toggle_lobby_ready, reset_ready_on_lobby, update_lobby_overlay));
     }
 }
 
@@ -788,6 +793,7 @@ fn buffer_input(
     route_following: Query<(), (With<LocalShip>, With<RouteFollowing>)>,
     planner: Res<RoutePlanner>,
     mut picker: ResMut<ClassPicker>,
+    local_ready: Res<LocalLobbyReady>,
 ) {
     // Don't overwrite inputs while route following or planning
     if route_following.single().is_ok() || planner.active {
@@ -820,6 +826,7 @@ fn buffer_input(
             drop_mine: keypress.just_pressed(KeyCode::KeyX),
             aim_angle,
             class_request,
+            lobby_ready: local_ready.0,
         };
     }
 }
@@ -1968,6 +1975,18 @@ struct KillFeedContainer;
 #[derive(Component)]
 struct KillFeedEntry;
 
+#[derive(Component)]
+struct LobbyOverlay;
+
+#[derive(Component)]
+struct LobbyRosterList;
+
+#[derive(Component)]
+struct LobbyStatusText;
+
+#[derive(Component)]
+struct LobbyRosterEntry;
+
 type HealthBarFilter = (
     With<HealthBarFill>,
     Without<FuelBarFill>,
@@ -2263,6 +2282,202 @@ fn spawn_score_hud(mut commands: Commands) {
 }
 
 /// Spawn hidden victory overlay (shown when a team wins).
+// ── Lobby UI ─────────────────────────────────────────────────────────────────
+
+fn toggle_lobby_ready(
+    kb: Res<ButtonInput<KeyCode>>,
+    mut local_ready: ResMut<LocalLobbyReady>,
+    scores_q: Query<&TeamScores>,
+) {
+    if !kb.just_pressed(KeyCode::Space) {
+        return;
+    }
+    let in_game = scores_q
+        .single()
+        .map(|s| matches!(s.lobby_phase, LobbyPhase::InGame))
+        .unwrap_or(false);
+    if !in_game {
+        local_ready.0 = !local_ready.0;
+    }
+}
+
+fn reset_ready_on_lobby(
+    scores_q: Query<Ref<TeamScores>>,
+    mut local_ready: ResMut<LocalLobbyReady>,
+) {
+    let Ok(scores) = scores_q.single() else { return; };
+    if scores.is_changed() && matches!(scores.lobby_phase, LobbyPhase::Lobby) {
+        local_ready.0 = false;
+    }
+}
+
+fn spawn_lobby_overlay(mut commands: Commands) {
+    let root = commands
+        .spawn((
+            LobbyOverlay,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.65)),
+            GlobalZIndex(200),
+        ))
+        .id();
+
+    let panel = commands
+        .spawn((
+            ChildOf(root),
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(12.0),
+                padding: UiRect::all(Val::Px(28.0)),
+                border_radius: BorderRadius::all(Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.04, 0.04, 0.12, 0.92)),
+        ))
+        .id();
+
+    // Title
+    commands.spawn((
+        ChildOf(panel),
+        Text::new("LOBBY"),
+        TextFont { font_size: 26.0, ..default() },
+        TextColor(Color::srgba(0.95, 0.95, 0.95, 1.0)),
+    ));
+
+    // Roster list
+    commands.spawn((
+        ChildOf(panel),
+        LobbyRosterList,
+        Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(5.0),
+            ..default()
+        },
+    ));
+
+    // Status text
+    commands.spawn((
+        ChildOf(panel),
+        LobbyStatusText,
+        Text::new("Waiting for players..."),
+        TextFont { font_size: 14.0, ..default() },
+        TextColor(Color::srgba(0.65, 0.65, 0.65, 0.9)),
+    ));
+
+    // Key hint
+    commands.spawn((
+        ChildOf(panel),
+        Text::new("[SPACE] ready up   [TAB] change class"),
+        TextFont { font_size: 11.0, ..default() },
+        TextColor(Color::srgba(0.45, 0.45, 0.45, 0.9)),
+    ));
+}
+
+fn update_lobby_overlay(
+    scores_q: Query<Ref<TeamScores>>,
+    mut overlay_q: Query<&mut Visibility, With<LobbyOverlay>>,
+    mut status_q: Query<&mut Text, With<LobbyStatusText>>,
+    roster_container_q: Query<Entity, With<LobbyRosterList>>,
+    roster_entries_q: Query<Entity, With<LobbyRosterEntry>>,
+    mut commands: Commands,
+    local_ready: Res<LocalLobbyReady>,
+) {
+    let Ok(scores) = scores_q.single() else { return; };
+    let Ok(mut vis) = overlay_q.single_mut() else { return; };
+
+    if matches!(scores.lobby_phase, LobbyPhase::InGame) {
+        *vis = Visibility::Hidden;
+        return;
+    }
+    *vis = Visibility::Inherited;
+
+    // Update status text
+    if let Ok(mut text) = status_q.single_mut() {
+        **text = match scores.lobby_phase {
+            LobbyPhase::Lobby => {
+                if scores.lobby_roster.is_empty() {
+                    "Waiting for players...".into()
+                } else if local_ready.0 {
+                    "Waiting for all players to ready up...".into()
+                } else {
+                    "Press SPACE to ready up".into()
+                }
+            }
+            LobbyPhase::Countdown(t) => format!("Starting in {}...", t.ceil() as u32),
+            LobbyPhase::InGame => unreachable!(),
+        };
+    }
+
+    // Rebuild roster only when something changed
+    if !scores.is_changed() && !local_ready.is_changed() {
+        return;
+    }
+    let Ok(container) = roster_container_q.single() else { return; };
+    for e in roster_entries_q.iter() {
+        commands.entity(e).despawn();
+    }
+
+    for entry in scores.lobby_roster.iter() {
+        let team_str = match entry.team {
+            Team::Red => "RED",
+            Team::Blue => "BLU",
+        };
+        let class_str = match entry.class {
+            ShipClass::Interceptor => "Interceptor",
+            ShipClass::Gunship => "Gunship",
+            ShipClass::TorpedoBoat => "Torpedo Boat",
+            ShipClass::Sniper => "Sniper",
+            ShipClass::DroneCommander => "Drone Commander",
+        };
+        let (ready_str, color) = if entry.ready {
+            ("[READY]", Color::srgba(0.3, 0.9, 0.3, 0.95))
+        } else {
+            ("[NOT READY]", Color::srgba(0.7, 0.4, 0.4, 0.9))
+        };
+        let team_color = match entry.team {
+            Team::Red => Color::srgba(1.0, 0.4, 0.4, 0.9),
+            Team::Blue => Color::srgba(0.4, 0.5, 1.0, 0.9),
+        };
+        // Row node
+        let row = commands
+            .spawn((
+                LobbyRosterEntry,
+                ChildOf(container),
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(10.0),
+                    ..default()
+                },
+            ))
+            .id();
+        // Team + class
+        commands.spawn((
+            ChildOf(row),
+            Text::new(format!("[{team_str}] {class_str}")),
+            TextFont { font_size: 13.0, ..default() },
+            TextColor(team_color),
+        ));
+        // Ready badge
+        commands.spawn((
+            ChildOf(row),
+            Text::new(ready_str),
+            TextFont { font_size: 13.0, ..default() },
+            TextColor(color),
+        ));
+    }
+}
+
 fn spawn_victory_overlay(mut commands: Commands) {
     let overlay = commands
         .spawn((
@@ -3691,6 +3906,7 @@ fn route_follow(
             drop_mine: keypress.just_pressed(KeyCode::KeyX),
             aim_angle,
             class_request: 0,
+            lobby_ready: false, // autopilot never overrides lobby ready state
         };
     }
 }

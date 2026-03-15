@@ -299,6 +299,27 @@ pub struct ZoneShield {
     pub active: bool,
 }
 
+/// Lobby phase: waiting for players to ready up, countdown, or in-game.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, Copy)]
+pub enum LobbyPhase {
+    /// Waiting for all players to ready up.
+    #[default]
+    Lobby,
+    /// All players ready — counting down before spawning.
+    Countdown(f32),
+    /// Game is active.
+    InGame,
+}
+
+/// One player's entry in the lobby roster.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LobbyEntry {
+    pub peer_id: PeerId,
+    pub team: Team,
+    pub class: ShipClass,
+    pub ready: bool,
+}
+
 /// Round state: 0=Playing, 1=Red won, 2=Blue won.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default, Copy)]
 pub enum RoundState {
@@ -349,6 +370,10 @@ pub struct TeamScores {
     pub end_stats: Vec<PlayerStat>,
     /// Which team won the last round; preserved through Restarting phase.
     pub last_winner: Option<Team>,
+    /// Current lobby phase (Lobby → Countdown → InGame → back to Lobby on round restart).
+    pub lobby_phase: LobbyPhase,
+    /// Live snapshot of all players in the lobby/game (team, class, ready flag).
+    pub lobby_roster: Vec<LobbyEntry>,
 }
 
 // --- Inputs ---
@@ -372,6 +397,8 @@ pub struct ShipInput {
     pub aim_angle: f32,
     /// Request to switch ship class: 0=none, 1=Interceptor, 2=Gunship, 3=TorpedoBoat.
     pub class_request: u8,
+    /// Player has pressed ready in the lobby.
+    pub lobby_ready: bool,
 }
 
 impl MapEntities for ShipInput {

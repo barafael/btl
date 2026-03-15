@@ -80,6 +80,14 @@ struct MatchStats {
     kills: HashMap<PeerId, (Team, u32)>,
 }
 
+/// Whether the game is in lobby or active play.
+#[derive(Resource, Default, PartialEq)]
+enum ServerGamePhase {
+    #[default]
+    Lobby,
+    InGame,
+}
+
 const RESPAWN_DELAY: f32 = 3.0;
 
 pub struct ServerPlugin;
@@ -93,22 +101,19 @@ impl Plugin for ServerPlugin {
         app.init_resource::<RespawnQueue>();
         app.init_resource::<ZoneDefenseTimers>();
         app.init_resource::<MatchStats>();
+        app.init_resource::<ServerGamePhase>();
         app.add_systems(
             Startup,
             (start_server, spawn_asteroids, spawn_nebula, spawn_scores),
         );
+        // Always-on: lobby, class switching, physics, collision, respawn
         app.add_systems(
             FixedUpdate,
             (
+                lobby_management,
                 handle_class_switch,
-                server_fire_projectiles,
-                server_fire_laser,
-                server_drop_mines,
-                server_launch_torpedoes,
                 server_turret_ai,
                 server_torpedo_homing,
-                server_railgun,
-                server_cloak,
                 btl_shared::check_projectile_hits.after(btl_shared::rebuild_collision_grids),
                 btl_shared::check_projectile_asteroid_hits.after(btl_shared::rebuild_collision_grids),
                 btl_shared::check_mine_detonations,
@@ -120,6 +125,18 @@ impl Plugin for ServerPlugin {
                 process_respawns,
                 collision_damage.after(btl_shared::rebuild_collision_grids),
             ),
+        );
+        // In-game only: weapons + drones
+        app.add_systems(
+            FixedUpdate,
+            (
+                server_fire_projectiles,
+                server_fire_laser,
+                server_drop_mines,
+                server_launch_torpedoes,
+                server_railgun,
+                server_cloak,
+            ).run_if(in_game_phase),
         );
         app.add_systems(
             FixedUpdate,
@@ -134,7 +151,12 @@ impl Plugin for ServerPlugin {
                 btl_shared::drone_kamikaze_impact,
             ),
         );
-        app.add_systems(FixedUpdate, (update_zone_scores, zone_benefits, round_management));
+        app.add_systems(FixedUpdate, round_management);
+        // In-game only: zone scoring + defenses
+        app.add_systems(
+            FixedUpdate,
+            (update_zone_scores, zone_benefits).run_if(in_game_phase),
+        );
         app.add_systems(
             FixedUpdate,
             (
@@ -147,7 +169,7 @@ impl Plugin for ServerPlugin {
                 zone_railgun_ai,
                 zone_shield_deflect,
                 btl_shared::check_projectile_zone_drone_hits.after(btl_shared::rebuild_collision_grids),
-            ),
+            ).run_if(in_game_phase),
         );
         app.add_observer(handle_new_client_link);
         app.add_observer(handle_client_connected);
@@ -193,6 +215,73 @@ fn start_server(mut commands: Commands) {
 }
 
 /// When a new client link is created, attach a ReplicationSender.
+/// Run condition: fire / zone systems only when game is in-progress (not in lobby or countdown).
+fn in_game_phase(scores_q: Query<&TeamScores>) -> bool {
+    scores_q
+        .single()
+        .map(|s| matches!(s.lobby_phase, LobbyPhase::InGame))
+        .unwrap_or(false)
+}
+
+/// Manages the pre-game lobby: tracks player ready states and transitions to InGame.
+fn lobby_management(
+    mut scores_q: Query<&mut TeamScores>,
+    ships: Query<(
+        &lightyear::prelude::input::native::ActionState<ShipInput>,
+        &PlayerId,
+        &Team,
+        &ShipClass,
+    )>,
+    mut server_phase: ResMut<ServerGamePhase>,
+) {
+    let Ok(mut scores) = scores_q.single_mut() else {
+        return;
+    };
+
+    // Build the current roster from all live ships.
+    let new_roster: Vec<LobbyEntry> = ships
+        .iter()
+        .map(|(action, player_id, team, class)| LobbyEntry {
+            peer_id: player_id.0,
+            team: *team,
+            class: *class,
+            ready: action.0.lobby_ready,
+        })
+        .collect();
+
+    match scores.lobby_phase {
+        LobbyPhase::InGame => {
+            // Mark all players as ready in the roster for display purposes.
+            scores.lobby_roster = new_roster
+                .into_iter()
+                .map(|mut e| { e.ready = true; e })
+                .collect();
+        }
+        LobbyPhase::Lobby => {
+            scores.lobby_roster = new_roster.clone();
+            let all_ready = !new_roster.is_empty() && new_roster.iter().all(|e| e.ready);
+            if all_ready {
+                scores.lobby_phase = LobbyPhase::Countdown(5.0);
+            }
+        }
+        LobbyPhase::Countdown(t) => {
+            scores.lobby_roster = new_roster.clone();
+            let all_still_ready = !new_roster.is_empty() && new_roster.iter().all(|e| e.ready);
+            if !all_still_ready {
+                scores.lobby_phase = LobbyPhase::Lobby;
+                return;
+            }
+            let new_t = t - FIXED_DT;
+            if new_t <= 0.0 {
+                scores.lobby_phase = LobbyPhase::InGame;
+                *server_phase = ServerGamePhase::InGame;
+            } else {
+                scores.lobby_phase = LobbyPhase::Countdown(new_t);
+            }
+        }
+    }
+}
+
 fn handle_new_client_link(trigger: On<Add, LinkOf>, mut commands: Commands) {
     info!(
         "New client link entity {:?} — attaching ReplicationSender",
@@ -1364,6 +1453,7 @@ fn round_management(
     mut commands: Commands,
     mut timers: ResMut<ZoneDefenseTimers>,
     mut match_stats: ResMut<MatchStats>,
+    mut server_phase: ResMut<ServerGamePhase>,
     zone_drones: Query<Entity, With<ZoneDrone>>,
     zone_railguns: Query<Entity, With<ZoneRailgun>>,
     zone_shields: Query<Entity, With<ZoneShield>>,
@@ -1404,6 +1494,10 @@ fn round_management(
                 scores.end_stats.clear();
                 scores.last_winner = None;
                 scores.round_state = RoundState::Playing;
+                // Return to lobby; players must re-ready for the next round.
+                scores.lobby_phase = LobbyPhase::Lobby;
+                scores.lobby_roster.iter_mut().for_each(|e| e.ready = false);
+                *server_phase = ServerGamePhase::Lobby;
 
                 // Reset defense timers
                 *timers = ZoneDefenseTimers::default();
