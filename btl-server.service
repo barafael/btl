@@ -1,0 +1,15 @@
+[Unit]
+Description=BTL Game Server
+After=network.target
+
+[Service]
+ExecStart=/opt/btl/btl-server
+WorkingDirectory=/opt/btl
+Restart=on-failure
+RestartSec=5
+
+# Optional: override port or other env vars here
+# Environment=BTL_PORT=5888
+
+[Install]
+WantedBy=multi-user.target
