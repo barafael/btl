@@ -21,7 +21,7 @@ use btl_shared::{
     DamageFlash, DEFENSE_TURRET_MOUNTS, DRONE_LASER_RANGE, DRONE_RADIUS, Drone, DroneKind,
     FrameInterpolate, LASER_RANGE, MINE_RADIUS,
     MINE_TRIGGER_RADIUS, Mine, PULSE_RADIUS, Position, Projectile, RailgunCharge, Rotation,
-    SHIP_RADIUS, ship_mass, ship_radius, ship_class_from_env, SpawnProtection,
+    SHIP_RADIUS, ship_mass, ship_radius, SpawnProtection,
     TBOAT_RADIUS, TORPEDO_RADIUS, TURRET_MOUNTS, Torpedo,
     ZoneDrone, ZoneRailgun, ZoneShield,
     FACTORY_DRONE_LASER_RANGE, OBJECTIVE_ZONE_RADIUS, ZONE_SHIELD_RADIUS, RailgunTurretState,
@@ -332,11 +332,6 @@ struct AutopilotOutput {
     afterburner: bool,
     /// Desired heading — used as aim_angle fallback when no cursor is available.
     desired_angle: f32,
-    // Diagnostic fields for debug logging
-    target_speed: f32,
-    heading_err: f32,
-    fwd_vel_error: f32,
-    lat_vel_error: f32,
 }
 
 /// Tuning coefficients for the autopilot.
@@ -477,52 +472,6 @@ struct RouteFollowing {
     config: AutopilotConfig,
     /// Progress along the path as a fractional index (continuous, not discrete)
     progress: f32,
-    /// Tick counter for periodic debug logging (tuning only).
-    debug_tick: u32,
-}
-
-/// Test route injector for autopilot tuning.
-/// Cycles through predefined routes once ship has stopped after each one.
-#[derive(Resource, Default)]
-struct TestRoutes {
-    /// Absolute waypoints per route (world coordinates, not relative to ship).
-    routes: Vec<Vec<Vec2>>,
-    current: usize,
-}
-
-impl TestRoutes {
-    fn new() -> Self {
-        // Routes chain: first waypoint of each route = last waypoint of previous.
-        // Ship brakes to a stop between routes, so it starts each route near WP[0].
-        let routes = vec![
-            // 1. Sweeping S-curve (from spawn, ends at (6500,0))
-            vec![
-                Vec2::new(-200.0, 0.0), Vec2::new(1500.0, 0.0), Vec2::new(2500.0, 1000.0),
-                Vec2::new(4000.0, 1200.0), Vec2::new(5500.0, 1000.0), Vec2::new(6500.0, 0.0),
-            ],
-            // 2. Southern sweep (from (6500,0), arcs south to (0,-3500))
-            vec![
-                Vec2::new(6500.0, 0.0), Vec2::new(7000.0, -1000.0), Vec2::new(7000.0, -2500.0),
-                Vec2::new(6000.0, -4000.0), Vec2::new(4000.0, -5000.0), Vec2::new(0.0, -3500.0),
-            ],
-            // 3. Chicane (from (0,-3500), alternating west to (-5500,-4000))
-            vec![
-                Vec2::new(0.0, -3500.0), Vec2::new(-2000.0, -2500.0), Vec2::new(-3000.0, -4500.0),
-                Vec2::new(-4500.0, -3000.0), Vec2::new(-5500.0, -4500.0),
-            ],
-            // 4. Wide U-turn (from (-5500,-4500), sweeps north to (-5000,3000))
-            vec![
-                Vec2::new(-5500.0, -4500.0), Vec2::new(-7000.0, -2500.0), Vec2::new(-7000.0, 0.0),
-                Vec2::new(-6500.0, 2000.0), Vec2::new(-5000.0, 3000.0),
-            ],
-            // 5. Lazy loop back (from (-5000,3000), sweeps back toward origin)
-            vec![
-                Vec2::new(-5000.0, 3000.0), Vec2::new(-2500.0, 5000.0), Vec2::new(0.0, 5000.0),
-                Vec2::new(2500.0, 4000.0), Vec2::new(3500.0, 2000.0), Vec2::new(2000.0, 0.0),
-            ],
-        ];
-        Self { routes, current: 0 }
-    }
 }
 
 /// Build a fan-triangulated mesh from a convex polygon defined by `verts`.
@@ -654,19 +603,12 @@ impl Plugin for ClientPlugin {
         app.init_resource::<CameraShake>();
         app.init_resource::<RoutePlanner>();
         app.init_resource::<LocalLobbyReady>();
-        // Pre-select class from BTL_AP_CLASS env var so it spawns immediately on connect (tuning mode).
-        let ap_class = ship_class_from_env();
-        app.insert_resource(ClassPicker {
-            pending_request: ap_class.to_request(),
-            selected: ap_class,
-            open: false,
-        });
-        app.insert_resource(TestRoutes::new());
+        app.init_resource::<ClassPicker>();
 
         app.add_systems(Startup, connect_to_server);
         app.add_systems(
             FixedPreUpdate,
-            (inject_test_route, buffer_input, brake_between_routes, route_follow)
+            (buffer_input, route_follow)
                 .chain()
                 .in_set(InputSystems::WriteClientInputs),
         );
@@ -3536,7 +3478,6 @@ fn route_planning_input(
                 speed_profile,
                 config: cfg,
                 progress: 0.0,
-                debug_tick: 0,
             });
         }
         planner.waypoints.clear();
@@ -3676,95 +3617,6 @@ fn cross_track_error(path: &[Vec2], ship_pos: Vec2, progress: f32) -> f32 {
     (ship_pos - nearest).dot(normal)
 }
 
-/// Holds stabilize=1.0 between test routes until ship has stopped.  Remove when tuning is done.
-fn brake_between_routes(
-    test_routes: Res<TestRoutes>,
-    mut input_query: Query<&mut ActionState<ShipInput>, With<InputMarker<ShipInput>>>,
-    route_query: Query<(), With<RouteFollowing>>,
-    ship_query: Query<&LinearVelocity, With<LocalShip>>,
-) {
-    // Only brake when test is running and no route is active
-    if test_routes.current == 0 || test_routes.current >= test_routes.routes.len() {
-        return;
-    }
-    if route_query.single().is_ok() {
-        return;
-    }
-    let speed = ship_query.single().map(|v| v.0.length()).unwrap_or(0.0);
-    if speed < 5.0 {
-        return;
-    }
-    for mut action_state in input_query.iter_mut() {
-        action_state.0 = ShipInput {
-            stabilize: 1.0,
-            ..default()
-        };
-    }
-}
-
-/// Injects the next test route when ship has stopped.  Remove when tuning is done.
-fn inject_test_route(
-    mut commands: Commands,
-    mut test_routes: ResMut<TestRoutes>,
-    ship_query: Query<(Entity, &LinearVelocity, Option<&ShipClass>), With<LocalShip>>,
-    route_query: Query<(), With<RouteFollowing>>,
-) {
-    if test_routes.current >= test_routes.routes.len() {
-        return;
-    }
-    if route_query.single().is_ok() {
-        return; // still running a route
-    }
-    let Ok((entity, lin_vel, class)) = ship_query.single() else {
-        return;
-    };
-    // Wait for the configured class to spawn — the default Interceptor spawns first during
-    // the class-switch round-trip; injecting on it would use the wrong config.
-    let expected_class = ship_class_from_env();
-    if class.copied().unwrap_or_default() != expected_class {
-        return;
-    }
-    if lin_vel.0.length() > 30.0 {
-        return; // wait until nearly stopped
-    }
-
-    let route_idx = test_routes.current;
-    test_routes.current += 1;
-
-    // Absolute waypoints — use directly, no offset needed.
-    let waypoints: Vec<Vec2> = test_routes.routes[route_idx].clone();
-
-    let mut path = Vec::with_capacity(ROUTE_SAMPLE_COUNT);
-    for i in 0..ROUTE_SAMPLE_COUNT {
-        let t = i as f32 / (ROUTE_SAMPLE_COUNT - 1) as f32;
-        path.push(catmull_rom_sample(&waypoints, t));
-    }
-    let cfg = AutopilotConfig::for_class(class.copied().unwrap_or_default());
-    let curvatures = compute_curvatures(&path);
-    let arc_lengths = compute_arc_lengths(&path);
-    let speed_profile = compute_speed_profile(&curvatures, &arc_lengths, &cfg);
-
-    let total_arc = arc_lengths.last().copied().unwrap_or(0.0);
-    let max_k = curvatures.iter().cloned().fold(0.0f32, f32::max);
-    let min_spd = speed_profile.iter().cloned().fold(f32::MAX, f32::min);
-    let max_spd = speed_profile.iter().cloned().fold(0.0f32, f32::max);
-    eprint!("STARTING TEST ROUTE {} pts={} arc={:.0} max_k={:.5} spd={:.0}..{:.0} wps:",
-        route_idx + 1, path.len(), total_arc, max_k, min_spd, max_spd);
-    for wp in &waypoints {
-        eprint!(" ({:.0},{:.0})", wp.x, wp.y);
-    }
-    eprintln!();
-
-    commands.entity(entity).insert(RouteFollowing {
-        path,
-        curvatures,
-        speed_profile,
-        config: cfg,
-        progress: 0.0,
-        debug_tick: 0,
-    });
-}
-
 /// Velocity-vector tracking autopilot: targets desired_vel = tangent × speed_profile + CTE correction.
 fn route_follow(
     mut commands: Commands,
@@ -3824,9 +3676,6 @@ fn route_follow(
     following.progress = proj
         .max(following.progress)
         .min(following.progress + max_advance);
-    following.debug_tick += 1;
-    let debug_tick = following.debug_tick;
-
     let progress = following.progress;
     let path = &following.path;
 
@@ -3878,21 +3727,6 @@ fn route_follow(
             (delta.length_squared() > 1.0).then(|| delta.y.atan2(delta.x))
         })
         .unwrap_or(out.desired_angle);
-
-    // Periodic debug logging (every 30 ticks) — remove when tuning is done
-    if debug_tick % 30 == 0 {
-        let path_pos = path_lerp(path, progress);
-        eprintln!(
-            "AP t={} pos=({:.0},{:.0}) pp=({:.0},{:.0}) cte={:.1} spd={:.1}/{:.1}(raw={:.1}) \
-             hdg={:.3} fwd_err={:.1} lat_err={:.1} thr={:.2} stab={:.2} str={:.2} ab={} prg={:.1}",
-            debug_tick,
-            ship_pos.x, ship_pos.y, path_pos.x, path_pos.y,
-            cte, speed, out.target_speed, target_speed_raw, out.heading_err,
-            out.fwd_vel_error, out.lat_vel_error,
-            out.thrust_forward, out.stabilize, out.strafe, out.afterburner as u8,
-            progress,
-        );
-    }
 
     for mut action_state in input_query.iter_mut() {
         action_state.0 = ShipInput {
@@ -3965,10 +3799,6 @@ fn ap_velocity_vector(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f
         strafe,
         afterburner,
         desired_angle,
-        target_speed,
-        heading_err,
-        fwd_vel_error,
-        lat_vel_error,
     }
 }
 
@@ -4060,10 +3890,6 @@ fn ap_thruster_rotate(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f
     let cte_cmd = cfg.correction_gain * i.cte + cfg.correction_kd * lat_vel_path;
     let strafe = -(cte_cmd / cfg.vel_error_scale).clamp(-1.0, 1.0);
 
-    let vel_error = desired_vel - i.lin_vel;
-    let fwd_vel_error = vel_error.dot(i.ship_fwd);
-    let lat_vel_error = vel_error.dot(i.ship_right);
-
     AutopilotOutput {
         rotate,
         thrust_forward,
@@ -4071,10 +3897,6 @@ fn ap_thruster_rotate(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f
         strafe,
         afterburner,
         desired_angle,
-        target_speed,
-        heading_err,
-        fwd_vel_error,
-        lat_vel_error,
     }
 }
 
@@ -4212,10 +4034,6 @@ fn ap_sniper_path(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f32) 
     let lat_vel_path = i.lin_vel.dot(i.path_normal);
     let strafe = -(cfg.correction_kd * lat_vel_path / cfg.correction_cap).clamp(-1.0, 1.0);
 
-    // Diagnostics
-    let fwd_vel_error = delta_v.dot(i.ship_fwd);
-    let lat_vel_error = delta_v.dot(i.ship_right);
-
     AutopilotOutput {
         rotate,
         thrust_forward,
@@ -4223,9 +4041,5 @@ fn ap_sniper_path(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f32) 
         strafe,
         afterburner,
         desired_angle: blended_angle,
-        target_speed,
-        heading_err,
-        fwd_vel_error,
-        lat_vel_error,
     }
 }

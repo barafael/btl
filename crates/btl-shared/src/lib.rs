@@ -55,7 +55,7 @@ pub const AUTOCANNON_SPEED: f32 = 800.0;
 /// Damage per hit
 pub const AUTOCANNON_DAMAGE: f32 = 8.0;
 /// Projectile lifetime in seconds
-pub const AUTOCANNON_LIFETIME: f32 = 3.2;
+pub const AUTOCANNON_LIFETIME: f32 = MAP_RADIUS * 2.0 / AUTOCANNON_SPEED;
 /// Projectile collider radius
 pub const PROJECTILE_RADIUS: f32 = 3.0;
 /// Muzzle offset from ship center (spawn at ship edge)
@@ -96,7 +96,7 @@ pub const GUNSHIP_AMMO_REGEN: f32 = 1.0;
 pub const HEAVY_CANNON_COOLDOWN: f32 = 0.667; // ~1.5 rounds/s
 pub const HEAVY_CANNON_SPEED: f32 = 600.0;
 pub const HEAVY_CANNON_DAMAGE: f32 = 35.0;
-pub const HEAVY_CANNON_LIFETIME: f32 = 4.8;
+pub const HEAVY_CANNON_LIFETIME: f32 = MAP_RADIUS * 2.0 / HEAVY_CANNON_SPEED;
 pub const HEAVY_CANNON_AMMO_COST: f32 = 3.0;
 pub const HEAVY_PROJECTILE_RADIUS: f32 = 5.0;
 pub const HEAVY_MUZZLE_OFFSET: f32 = GUNSHIP_RADIUS + HEAVY_PROJECTILE_RADIUS + 2.0;
@@ -107,7 +107,7 @@ pub const TURRET_COUNT: usize = 3;
 pub const TURRET_COOLDOWN: f32 = 0.333; // ~3 rounds/s
 pub const TURRET_SPEED: f32 = 700.0;
 pub const TURRET_DAMAGE: f32 = 5.0;
-pub const TURRET_LIFETIME: f32 = 1.6;
+pub const TURRET_LIFETIME: f32 = MAP_RADIUS * 2.0 / TURRET_SPEED;
 pub const TURRET_RANGE: f32 = 1600.0;
 /// Max turret rotation speed (radians/sec)
 pub const TURRET_SLEW_RATE: f32 = 4.0;
@@ -135,7 +135,7 @@ pub const TBOAT_AMMO_REGEN: f32 = 3.0;
 
 // --- Laser (Torpedo Boat primary, continuous beam) ---
 
-pub const LASER_RANGE: f32 = 1280.0;
+pub const LASER_RANGE: f32 = MAP_RADIUS * 2.0;
 pub const LASER_DPS: f32 = 20.0;
 /// Ammo consumed per second while laser is firing
 pub const LASER_AMMO_COST: f32 = 5.0;
@@ -174,7 +174,7 @@ pub const RAILGUN_COOLDOWN: f32 = 5.0;
 /// Railgun projectile speed (very fast)
 pub const RAILGUN_SPEED: f32 = 3500.0;
 /// Railgun projectile lifetime (seconds)
-pub const RAILGUN_LIFETIME: f32 = 2.4;
+pub const RAILGUN_LIFETIME: f32 = MAP_RADIUS * 2.0 / RAILGUN_SPEED;
 /// Railgun projectile collision radius
 pub const RAILGUN_PROJECTILE_RADIUS: f32 = 3.0;
 
@@ -202,7 +202,7 @@ pub const DEFENSE_TURRET_COUNT: usize = 5;
 pub const DEFENSE_TURRET_COOLDOWN: f32 = 0.5;
 pub const DEFENSE_TURRET_SPEED: f32 = 600.0;
 pub const DEFENSE_TURRET_DAMAGE: f32 = 3.0;
-pub const DEFENSE_TURRET_LIFETIME: f32 = 1.28;
+pub const DEFENSE_TURRET_LIFETIME: f32 = MAP_RADIUS * 2.0 / DEFENSE_TURRET_SPEED;
 pub const DEFENSE_TURRET_RANGE: f32 = 1200.0;
 pub const DEFENSE_TURRET_SLEW_RATE: f32 = 5.0;
 pub const DEFENSE_TURRET_FIRE_TOLERANCE: f32 = 0.2;
@@ -1146,16 +1146,6 @@ pub fn ship_ammo_regen(class: &ShipClass) -> f32 {
     }
 }
 
-/// Parse ship class from the `BTL_AP_CLASS` env var (defaults to TorpedoBoat).
-pub fn ship_class_from_env() -> ShipClass {
-    match std::env::var("BTL_AP_CLASS").as_deref().unwrap_or("") {
-        "Sniper" | "sniper" => ShipClass::Sniper,
-        "Interceptor" | "interceptor" => ShipClass::Interceptor,
-        "Gunship" | "gunship" => ShipClass::Gunship,
-        "DroneCommander" | "dronecommander" | "drone_commander" => ShipClass::DroneCommander,
-        _ => ShipClass::TorpedoBoat,
-    }
-}
 
 pub fn check_projectile_hits(
     mut commands: Commands,

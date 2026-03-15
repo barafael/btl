@@ -30,7 +30,7 @@ use btl_shared::{
     CollisionGrids, FIXED_DT, MAX_ASTEROID_RADIUS, MAX_SHIP_RADIUS,
     generate_asteroid_layout, objective_zone_positions, ray_circle_intersect,
     CAPTURE_RATE, DECAP_RATE, DAMAGE_FLASH_DURATION, DamageFlash, SpawnProtection,
-    ship_radius, ship_max_health, ship_ammo_regen, ship_class_from_env,
+    ship_radius, ship_max_health, ship_ammo_regen,
     COLLISION_DAMAGE_VELOCITY_THRESHOLD, COLLISION_DAMAGE_PER_VELOCITY, COLLISION_FASTER_SHIP_MULT,
     ZONE_HP_REGEN, ZONE_REGEN_MULT, FUEL_REGEN_RATE,
     OBJECTIVE_KINDS, ObjectiveKind, ZoneDrone, ZoneRailgun, ZoneShield,
@@ -196,6 +196,36 @@ fn start_server(mut commands: Commands) {
         .collect();
     info!("Certificate hash (for browser clients): {hash_hex}");
 
+    // Serve cert hash over HTTP so WASM clients can auto-connect without ?cert= param
+    let http_port = port + 1;
+    let hash_for_http = hash_hex.clone();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        let Ok(listener) = std::net::TcpListener::bind(
+            SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), http_port),
+        ) else {
+            error!("Failed to start cert hash HTTP server on port {http_port}");
+            return;
+        };
+        info!("Cert hash available at http://0.0.0.0:{http_port}/");
+        for mut stream in listener.incoming().flatten() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let body = &hash_for_http;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Access-Control-Allow-Origin: *\r\n\
+                 Content-Type: text/plain\r\n\
+                 Content-Length: {}\r\n\
+                 \r\n\
+                 {body}",
+                body.len(),
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+
     let netcode = NetcodeServer::new(NetcodeConfig {
         protocol_id: PROTOCOL_ID,
         private_key: PRIVATE_KEY,
@@ -355,8 +385,7 @@ fn handle_client_connected(
         trigger.entity
     );
 
-    // BTL_AP_CLASS env var overrides class for autopilot tuning (default: TorpedoBoat).
-    let class = ship_class_from_env();
+    let class = ShipClass::default();
 
     let ship = spawn_player_ship(&mut commands, peer_id, team, class, spawn_pos, trigger.entity);
 
@@ -364,12 +393,7 @@ fn handle_client_connected(
 }
 
 /// Spawn static asteroid obstacles from the deterministic layout.
-/// Set `NO_ASTEROIDS=1` env var to skip (useful for autopilot testing).
 fn spawn_asteroids(mut commands: Commands) {
-    if std::env::var("NO_ASTEROIDS").is_ok() {
-        info!("NO_ASTEROIDS set — skipping asteroid spawn");
-        return;
-    }
     let layout = generate_asteroid_layout();
     for (pos, radius, rotation) in &layout {
         commands.spawn((
