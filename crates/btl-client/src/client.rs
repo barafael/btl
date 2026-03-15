@@ -48,30 +48,55 @@ pub(crate) fn team_color(team: &Team) -> Color {
     }
 }
 
-/// Spawn a team-color indicator bar that floats above the ship in world space.
+/// Spawn a team-color indicator bar + health bar that float above the ship in world space.
 fn spawn_team_label(commands: &mut Commands, ship_entity: Entity, team: &Team, is_local: bool) {
     let (width, color) = if is_local {
         let c = match team {
             Team::Red => LinearRgba::new(2.5, 0.35, 0.2, 1.0),
             Team::Blue => LinearRgba::new(0.2, 0.55, 2.5, 1.0),
         };
-        (22.0_f32, Color::LinearRgba(c))
+        (28.0_f32, Color::LinearRgba(c))
     } else {
         let c = match team {
             Team::Red => Color::srgba(0.9, 0.2, 0.2, 0.65),
             Team::Blue => Color::srgba(0.2, 0.4, 0.9, 0.65),
         };
-        (16.0_f32, c)
+        (22.0_f32, c)
     };
+    // Team indicator
     commands.spawn((
         ShipLabel,
         ShipLabelFor(ship_entity),
         Sprite {
             color,
-            custom_size: Some(Vec2::new(width, 3.0)),
+            custom_size: Some(Vec2::new(width, 4.0)),
             ..default()
         },
         Transform::from_xyz(0.0, 0.0, 1.0),
+        Visibility::Hidden,
+    ));
+    // Health bar background
+    commands.spawn((
+        ShipHealthBarBg,
+        ShipLabelFor(ship_entity),
+        Sprite {
+            color: Color::srgba(0.1, 0.1, 0.1, 0.5),
+            custom_size: Some(Vec2::new(width, 3.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 0.9),
+        Visibility::Hidden,
+    ));
+    // Health bar fill
+    commands.spawn((
+        ShipHealthBarFill,
+        ShipLabelFor(ship_entity),
+        Sprite {
+            color: Color::srgba(0.2, 0.9, 0.2, 0.7),
+            custom_size: Some(Vec2::new(width, 3.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 0.95),
         Visibility::Hidden,
     ));
 }
@@ -80,16 +105,53 @@ fn spawn_team_label(commands: &mut Commands, ship_entity: Entity, team: &Team, i
 fn update_ship_labels(
     mut commands: Commands,
     mut labels: Query<(Entity, &ShipLabelFor, &mut Transform, &mut Visibility), With<ShipLabel>>,
-    ships: Query<&Transform, (With<ShipInitialized>, Without<ShipLabel>)>,
+    mut hp_bgs: Query<(Entity, &ShipLabelFor, &mut Transform, &mut Visibility), (With<ShipHealthBarBg>, Without<ShipLabel>, Without<ShipHealthBarFill>)>,
+    mut hp_fills: Query<(Entity, &ShipLabelFor, &mut Transform, &mut Visibility, &mut Sprite), (With<ShipHealthBarFill>, Without<ShipLabel>, Without<ShipHealthBarBg>)>,
+    ships: Query<(&Transform, &Health), (With<ShipInitialized>, Without<ShipLabel>, Without<ShipHealthBarBg>, Without<ShipHealthBarFill>)>,
 ) {
+    let label_offset_y = 42.0;
+    let hp_offset_y = 36.0;
+
     for (label_entity, ship_ref, mut label_tf, mut vis) in labels.iter_mut() {
-        if let Ok(ship_tf) = ships.get(ship_ref.0) {
+        if let Ok((ship_tf, _)) = ships.get(ship_ref.0) {
             label_tf.translation.x = ship_tf.translation.x;
-            label_tf.translation.y = ship_tf.translation.y + 32.0;
+            label_tf.translation.y = ship_tf.translation.y + label_offset_y;
             label_tf.translation.z = 1.0;
             *vis = Visibility::Inherited;
         } else {
             commands.entity(label_entity).despawn();
+        }
+    }
+
+    for (entity, ship_ref, mut tf, mut vis) in hp_bgs.iter_mut() {
+        if let Ok((ship_tf, _)) = ships.get(ship_ref.0) {
+            tf.translation.x = ship_tf.translation.x;
+            tf.translation.y = ship_tf.translation.y + hp_offset_y;
+            tf.translation.z = 0.9;
+            *vis = Visibility::Inherited;
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    for (entity, ship_ref, mut tf, mut vis, mut sprite) in hp_fills.iter_mut() {
+        if let Ok((ship_tf, health)) = ships.get(ship_ref.0) {
+            let frac = (health.current / health.max).clamp(0.0, 1.0);
+            let full_w = sprite.custom_size.map(|s| s.x).unwrap_or(22.0);
+            let bar_w = full_w * frac;
+            sprite.custom_size = Some(Vec2::new(bar_w, 3.0));
+            // Anchor bar to left edge: offset x so it shrinks from the right
+            let base_x = ship_tf.translation.x;
+            tf.translation.x = base_x - (full_w - bar_w) * 0.5;
+            tf.translation.y = ship_tf.translation.y + hp_offset_y;
+            tf.translation.z = 0.95;
+            *vis = Visibility::Inherited;
+            // Color: green → yellow → red
+            let r = (1.0 - frac) * 2.0;
+            let g = frac * 2.0;
+            sprite.color = Color::srgba(r.min(1.0), g.min(1.0), 0.1, 0.7);
+        } else {
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -157,7 +219,15 @@ struct ShipInitialized;
 #[derive(Component)]
 struct ShipLabel;
 
-/// Points from a ShipLabel back to the ship it tracks.
+/// Health bar background (dark).
+#[derive(Component)]
+struct ShipHealthBarBg;
+
+/// Health bar fill (colored by HP fraction).
+#[derive(Component)]
+struct ShipHealthBarFill;
+
+/// Points from a ShipLabel/health bar back to the ship it tracks.
 #[derive(Component)]
 struct ShipLabelFor(Entity);
 
@@ -2882,6 +2952,7 @@ fn spawn_class_button(
             ..default()
         },
         TextColor(color),
+        Pickable::IGNORE,
     ));
 
     commands.spawn((
@@ -2892,6 +2963,7 @@ fn spawn_class_button(
             ..default()
         },
         TextColor(Color::srgba(0.6, 0.6, 0.6, 0.8)),
+        Pickable::IGNORE,
     ));
 }
 

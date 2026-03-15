@@ -86,53 +86,84 @@ fn parse_config() -> (u64, SocketAddr, String) {
     (id, server, cert)
 }
 
-fn main() {
-    // Surface panics to browser console in WASM builds
-    #[cfg(not(feature = "native"))]
-    console_error_panic_hook::set_once();
+/// Fetch the server's self-signed cert hash over HTTP (WASM only).
+#[cfg(not(feature = "native"))]
+async fn fetch_cert_from_server(server_addr: SocketAddr) -> Option<String> {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen_futures::JsFuture;
 
-    let (client_id, server_addr, cert_hash) = parse_config();
+    let url = format!("http://{}:{}", server_addr.ip(), server_addr.port() + 1);
+    let window = web_sys::window()?;
+    let resp_value = JsFuture::from(window.fetch_with_str(&url)).await.ok()?;
+    let resp: web_sys::Response = resp_value.dyn_into().ok()?;
+    if !resp.ok() {
+        return None;
+    }
+    let text_value = JsFuture::from(resp.text().ok()?).await.ok()?;
+    text_value.as_string()
+}
 
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(LogPlugin {
-                    filter: "wgpu=error,naga=warn,bevy_render=warn,bevy_ecs=warn,\
-                         btl_client=debug,btl_shared=debug,btl_protocol=debug,\
-                         lightyear=info"
-                        .into(),
-                    ..default()
-                })
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        fit_canvas_to_parent: true,
-                        ..default()
-                    }),
+fn build_app(client_id: u64, server_addr: SocketAddr, cert_hash: String) -> App {
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(LogPlugin {
+                filter: "wgpu=error,naga=warn,bevy_render=warn,bevy_ecs=warn,\
+                     btl_client=debug,btl_shared=debug,btl_protocol=debug,\
+                     lightyear=info"
+                    .into(),
+                ..default()
+            })
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    fit_canvas_to_parent: true,
                     ..default()
                 }),
-        )
-        .insert_resource(ClearColor(Color::BLACK))
-        .add_plugins(SharedPlugin)
-        .add_plugins(client::ClientPlugin {
-            server_addr,
-            client_id,
-            cert_hash,
-        })
-        .add_plugins(starfield::StarfieldPlugin)
-        .add_plugins(particles::ParticlePlugin)
-        .add_plugins(effects::EffectsPlugin)
-        .add_plugins(minimap::MinimapPlugin)
-        .add_plugins(nebula::NebulaPlugin)
-        .add_systems(
-            Startup,
-            (
-                setup_camera,
-                spawn_boundary_ring,
-                spawn_tridrant_markers,
-                spawn_objective_zones,
-            ),
-        )
-        .run();
+                ..default()
+            }),
+    )
+    .insert_resource(ClearColor(Color::BLACK))
+    .add_plugins(SharedPlugin)
+    .add_plugins(client::ClientPlugin {
+        server_addr,
+        client_id,
+        cert_hash,
+    })
+    .add_plugins(starfield::StarfieldPlugin)
+    .add_plugins(particles::ParticlePlugin)
+    .add_plugins(effects::EffectsPlugin)
+    .add_plugins(minimap::MinimapPlugin)
+    .add_plugins(nebula::NebulaPlugin)
+    .add_systems(
+        Startup,
+        (
+            setup_camera,
+            spawn_boundary_ring,
+            spawn_tridrant_markers,
+            spawn_objective_zones,
+        ),
+    );
+    app
+}
+
+#[cfg(feature = "native")]
+fn main() {
+    let (client_id, server_addr, cert_hash) = parse_config();
+    build_app(client_id, server_addr, cert_hash).run();
+}
+
+#[cfg(not(feature = "native"))]
+fn main() {
+    console_error_panic_hook::set_once();
+    wasm_bindgen_futures::spawn_local(async {
+        let (client_id, server_addr, mut cert_hash) = parse_config();
+        if cert_hash.is_empty() {
+            if let Some(hash) = fetch_cert_from_server(server_addr).await {
+                cert_hash = hash;
+            }
+        }
+        build_app(client_id, server_addr, cert_hash).run();
+    });
 }
 
 fn setup_camera(mut commands: Commands) {

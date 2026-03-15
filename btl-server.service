@@ -6,9 +6,9 @@ After=network.target
 ExecStart=/opt/btl/btl-server
 WorkingDirectory=/opt/btl
 Restart=on-failure
-RestartSec=5
+RestartSec=3
 
-# Optional: override port or other env vars here
+# Optional: override game port (cert hash HTTP served on game_port+1)
 # Environment=BTL_PORT=5888
 
 [Install]
