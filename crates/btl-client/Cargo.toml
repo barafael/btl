@@ -26,6 +26,8 @@ lightyear = { version = "0.26.4", features = [
     "avian2d",
 ] }
 clap = { version = "4", features = ["derive"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Native-only: skip cert validation for dev
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

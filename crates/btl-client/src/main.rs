@@ -24,7 +24,7 @@ fn default_server_addr() -> SocketAddr {
 }
 
 #[cfg(feature = "native")]
-fn parse_config() -> (u64, SocketAddr, String) {
+fn parse_config() -> (u64, SocketAddr, String, Option<String>) {
     use clap::Parser;
 
     fn random_client_id() -> u64 {
@@ -48,14 +48,18 @@ fn parse_config() -> (u64, SocketAddr, String) {
         /// Server certificate hash (hex, required for remote servers with self-signed certs)
         #[arg(short, long, default_value = "")]
         cert: String,
+
+        /// Path to autopilot test file (JSON array of waypoint paths)
+        #[arg(long)]
+        autopilot_test: Option<String>,
     }
 
     let cli = Cli::parse();
-    (cli.id, cli.server, cli.cert)
+    (cli.id, cli.server, cli.cert, cli.autopilot_test)
 }
 
 #[cfg(not(feature = "native"))]
-fn parse_config() -> (u64, SocketAddr, String) {
+fn parse_config() -> (u64, SocketAddr, String, Option<String>) {
     // WASM: read from URL query params (?id=1&server=127.0.0.1:5888&cert=abcdef...)
     let params = web_sys::window()
         .and_then(|w| w.location().search().ok())
@@ -83,7 +87,7 @@ fn parse_config() -> (u64, SocketAddr, String) {
             }
         }
     }
-    (id, server, cert)
+    (id, server, cert, None)
 }
 
 /// Fetch the server's self-signed cert hash over HTTP (WASM only).
@@ -103,7 +107,7 @@ async fn fetch_cert_from_server(server_addr: SocketAddr) -> Option<String> {
     text_value.as_string()
 }
 
-fn build_app(client_id: u64, server_addr: SocketAddr, cert_hash: String) -> App {
+fn build_app(client_id: u64, server_addr: SocketAddr, cert_hash: String, autopilot_test_file: Option<String>) -> App {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -128,6 +132,7 @@ fn build_app(client_id: u64, server_addr: SocketAddr, cert_hash: String) -> App 
         server_addr,
         client_id,
         cert_hash,
+        autopilot_test_file,
     })
     .add_plugins(starfield::StarfieldPlugin)
     .add_plugins(particles::ParticlePlugin)
@@ -148,21 +153,21 @@ fn build_app(client_id: u64, server_addr: SocketAddr, cert_hash: String) -> App 
 
 #[cfg(feature = "native")]
 fn main() {
-    let (client_id, server_addr, cert_hash) = parse_config();
-    build_app(client_id, server_addr, cert_hash).run();
+    let (client_id, server_addr, cert_hash, autopilot_test_file) = parse_config();
+    build_app(client_id, server_addr, cert_hash, autopilot_test_file).run();
 }
 
 #[cfg(not(feature = "native"))]
 fn main() {
     console_error_panic_hook::set_once();
     wasm_bindgen_futures::spawn_local(async {
-        let (client_id, server_addr, mut cert_hash) = parse_config();
+        let (client_id, server_addr, mut cert_hash, autopilot_test_file) = parse_config();
         if cert_hash.is_empty() {
             if let Some(hash) = fetch_cert_from_server(server_addr).await {
                 cert_hash = hash;
             }
         }
-        build_app(client_id, server_addr, cert_hash).run();
+        build_app(client_id, server_addr, cert_hash, autopilot_test_file).run();
     });
 }
 

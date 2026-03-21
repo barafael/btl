@@ -2125,6 +2125,8 @@ dependencies = [
  "console_error_panic_hook",
  "getrandom 0.2.17",
  "lightyear",
+ "serde",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

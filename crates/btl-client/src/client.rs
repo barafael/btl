@@ -361,6 +361,32 @@ impl Default for RoutePlanner {
     }
 }
 
+/// State machine for the autopilot test mode.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum AutopilotTestState {
+    #[default]
+    WaitingForShip,
+    /// About to inject a route for the current path index.
+    StartingPath,
+    /// RouteFollowing is active; waiting for the autopilot to finish.
+    FollowingRoute,
+    /// Route finished; applying stabilize until the ship stops.
+    Braking,
+    /// All paths have been executed.
+    Done,
+}
+
+/// Resource that drives the autopilot test mode.
+/// Inserted only when `--autopilot-test <file>` is passed.
+#[derive(Resource)]
+struct AutopilotTestRunner {
+    /// Each entry is a sequence of waypoints (world-space points).
+    paths: Vec<Vec<Vec2>>,
+    /// Index of the path currently being executed (or about to be).
+    current_path: usize,
+    state: AutopilotTestState,
+}
+
 /// Which algorithm `route_follow` runs for this ship.
 /// Add a new variant here to implement an alternative autopilot.
 #[derive(Clone, Debug, Default)]
@@ -651,6 +677,7 @@ pub struct ClientPlugin {
     pub server_addr: SocketAddr,
     pub client_id: u64,
     pub cert_hash: String,
+    pub autopilot_test_file: Option<String>,
 }
 
 impl Plugin for ClientPlugin {
@@ -675,10 +702,27 @@ impl Plugin for ClientPlugin {
         app.init_resource::<LocalLobbyReady>();
         app.init_resource::<ClassPicker>();
 
+        if let Some(ref path) = self.autopilot_test_file {
+            let content = std::fs::read_to_string(path)
+                .unwrap_or_else(|e| panic!("failed to read autopilot test file {path:?}: {e}"));
+            let raw: Vec<Vec<[f32; 2]>> = serde_json::from_str(&content)
+                .unwrap_or_else(|e| panic!("invalid autopilot test JSON in {path:?}: {e}"));
+            let paths: Vec<Vec<Vec2>> = raw
+                .into_iter()
+                .map(|p| p.into_iter().map(|[x, y]| Vec2::new(x, y)).collect())
+                .collect();
+            info!("Autopilot test: loaded {} path(s) from {path:?}", paths.len());
+            app.insert_resource(AutopilotTestRunner {
+                paths,
+                current_path: 0,
+                state: AutopilotTestState::default(),
+            });
+        }
+
         app.add_systems(Startup, connect_to_server);
         app.add_systems(
             FixedPreUpdate,
-            (buffer_input, route_follow)
+            (buffer_input, route_follow, autopilot_test_drive)
                 .chain()
                 .in_set(InputSystems::WriteClientInputs),
         );
@@ -3401,17 +3445,23 @@ fn compute_arc_lengths(path: &[Vec2]) -> Vec<f32> {
 }
 
 
+/// Sample a Catmull-Rom spline through `waypoints` into `ROUTE_SAMPLE_COUNT` points
+/// and compute per-sample curvatures.  Returns `(path, curvatures)`.
+fn build_spline_path(waypoints: &[Vec2]) -> (Vec<Vec2>, Vec<f32>) {
+    let mut path = Vec::with_capacity(ROUTE_SAMPLE_COUNT);
+    for i in 0..ROUTE_SAMPLE_COUNT {
+        let t = i as f32 / (ROUTE_SAMPLE_COUNT - 1) as f32;
+        path.push(catmull_rom_sample(waypoints, t));
+    }
+    let curvatures = compute_curvatures(&path);
+    (path, curvatures)
+}
+
 fn rebuild_route_path(planner: &mut RoutePlanner) {
     planner.path.clear();
     planner.curvatures.clear();
     if planner.waypoints.len() >= 2 {
-        let wps = &planner.waypoints;
-        let mut path = Vec::with_capacity(ROUTE_SAMPLE_COUNT);
-        for i in 0..ROUTE_SAMPLE_COUNT {
-            let t = i as f32 / (ROUTE_SAMPLE_COUNT - 1) as f32;
-            path.push(catmull_rom_sample(wps, t));
-        }
-        let curvatures = compute_curvatures(&path);
+        let (path, curvatures) = build_spline_path(&planner.waypoints);
         planner.path = path;
         planner.curvatures = curvatures;
     }
@@ -4113,5 +4163,140 @@ fn ap_sniper_path(i: &AutopilotInput, cfg: &AutopilotConfig, ship_heading: f32) 
         strafe,
         afterburner,
         desired_angle: blended_angle,
+    }
+}
+
+/// Drives the autopilot test mode: iterates through loaded paths, injects routes,
+/// brakes between them, and logs telemetry every tick.
+fn autopilot_test_drive(
+    mut commands: Commands,
+    runner: Option<ResMut<AutopilotTestRunner>>,
+    ship_query: Query<
+        (Entity, &Transform, &LinearVelocity, Option<&ShipClass>),
+        With<LocalShip>,
+    >,
+    route_query: Query<(), (With<LocalShip>, With<RouteFollowing>)>,
+    mut input_query: Query<&mut ActionState<ShipInput>, With<InputMarker<ShipInput>>>,
+) {
+    let Some(mut runner) = runner else { return };
+
+    match runner.state {
+        AutopilotTestState::WaitingForShip => {
+            if ship_query.single().is_ok() {
+                info!("Autopilot test: ship found, starting {} path(s)", runner.paths.len());
+                runner.state = AutopilotTestState::StartingPath;
+            }
+        }
+        AutopilotTestState::StartingPath => {
+            if runner.current_path >= runner.paths.len() {
+                info!("Autopilot test: all paths complete");
+                runner.state = AutopilotTestState::Done;
+                return;
+            }
+            let Ok((entity, ship_tf, _, class)) = ship_query.single() else {
+                return;
+            };
+            let ship_pos = ship_tf.translation.truncate();
+
+            // Build waypoints: ship's current position + file waypoints
+            let mut waypoints = vec![ship_pos];
+            waypoints.extend_from_slice(&runner.paths[runner.current_path]);
+
+            if waypoints.len() < 2 {
+                warn!(
+                    "Autopilot test: path {} has no waypoints, skipping",
+                    runner.current_path
+                );
+                runner.current_path += 1;
+                return;
+            }
+
+            let (path, curvatures) = build_spline_path(&waypoints);
+            if path.len() < 2 {
+                runner.current_path += 1;
+                return;
+            }
+            let cfg = AutopilotConfig::for_class(class.copied().unwrap_or_default());
+            let arc_lengths = compute_arc_lengths(&path);
+            let speed_profile = compute_speed_profile(&curvatures, &arc_lengths, &cfg);
+
+            info!(
+                "Autopilot test: starting path {}/{} ({} waypoints, {:.0}px arc length)",
+                runner.current_path + 1,
+                runner.paths.len(),
+                waypoints.len(),
+                arc_lengths.last().copied().unwrap_or(0.0),
+            );
+
+            commands.entity(entity).insert(RouteFollowing {
+                path,
+                curvatures,
+                speed_profile,
+                config: cfg,
+                progress: 0.0,
+            });
+            runner.state = AutopilotTestState::FollowingRoute;
+        }
+        AutopilotTestState::FollowingRoute => {
+            // route_follow removes RouteFollowing when the route ends
+            if route_query.single().is_err() {
+                info!(
+                    "Autopilot test: path {} route complete, braking",
+                    runner.current_path + 1
+                );
+                runner.state = AutopilotTestState::Braking;
+            }
+        }
+        AutopilotTestState::Braking => {
+            let Ok((_, _, lin_vel, _)) = ship_query.single() else {
+                return;
+            };
+            let speed = lin_vel.0.length();
+
+            // Overwrite input with pure stabilize (braking)
+            for mut action_state in input_query.iter_mut() {
+                action_state.0 = ShipInput {
+                    stabilize: 1.0,
+                    ..default()
+                };
+            }
+
+            if speed < 1.0 {
+                info!(
+                    "Autopilot test: path {} braking complete (speed={:.2})",
+                    runner.current_path + 1,
+                    speed,
+                );
+                runner.current_path += 1;
+                runner.state = AutopilotTestState::StartingPath;
+            }
+        }
+        AutopilotTestState::Done => {}
+    }
+
+    // Telemetry logging while following or braking
+    if matches!(
+        runner.state,
+        AutopilotTestState::FollowingRoute | AutopilotTestState::Braking
+    ) {
+        if let Ok((_, ship_tf, lin_vel, _)) = ship_query.single() {
+            let pos = ship_tf.translation.truncate();
+            let fwd = ship_tf.rotation * Vec3::Y;
+            let heading = fwd.y.atan2(fwd.x);
+            if let Ok(action_state) = input_query.single() {
+                let inp = &action_state.0;
+                info!(
+                    "AP_TEST pos=({:.1},{:.1}) hdg={:.3} spd={:.1} fwd={:.2} rot={:.2} str={:.2} stab={:.2} ab={}",
+                    pos.x, pos.y,
+                    heading,
+                    lin_vel.0.length(),
+                    inp.thrust_forward,
+                    inp.rotate,
+                    inp.strafe,
+                    inp.stabilize,
+                    inp.afterburner as u8,
+                );
+            }
+        }
     }
 }
