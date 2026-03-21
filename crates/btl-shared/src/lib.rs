@@ -27,8 +27,8 @@ pub const SHIP_AFTERBURNER_THRUST: f32 = 500.0;
 pub const SHIP_RADIUS: f32 = 16.0;
 pub const SHIP_MAX_SPEED: f32 = 600.0;
 pub const SHIP_MAX_ANGULAR_SPEED: f32 = 6.0;
-pub const SHIP_STABILIZE_DECEL: f32 = 60.0;
-pub const SHIP_STABILIZE_ANG_DECEL: f32 = 10.0;
+pub const SHIP_STABILIZE_DECEL: f32 = 120.0;
+pub const SHIP_STABILIZE_ANG_DECEL: f32 = 20.0;
 pub const SHIP_ANGULAR_DECEL: f32 = 20.0;
 pub const SHIP_STRAFE_THRUST: f32 = 120.0;
 pub const SHIP_MAX_HEALTH: f32 = 100.0;
@@ -844,20 +844,19 @@ fn apply_ship_input(
         // Strafe (continuous, positive = left, negative = right)
         lin_vel.0 -= right * strafe_thrust * strf * dt;
 
-        // Rotation: continuous input sets desired turn rate as fraction of max
+        // Rotation: continuous input sets desired turn rate as fraction of max.
+        // When A/D is released, auto-stabilize angular velocity to zero.
         let has_rotation_input = rot.abs() > 0.01;
         let desired_ang = if has_rotation_input {
             rot * SHIP_MAX_ANGULAR_SPEED
-        } else if stab > 0.01 {
-            0.0
         } else {
-            ang_vel.0
+            0.0
         };
 
         if desired_ang != ang_vel.0 {
             let ang_diff = desired_ang - ang_vel.0;
-            let max_change = if stab > 0.01 && !has_rotation_input {
-                SHIP_STABILIZE_ANG_DECEL * stab * dt
+            let max_change = if !has_rotation_input {
+                SHIP_STABILIZE_ANG_DECEL * dt
             } else {
                 SHIP_ANGULAR_DECEL * dt
             };
